@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Wishlist — Track your favourite stocks.">
+  <title>Wishlist - Clean Data Flow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Background layer — fixed behind all content, respects prefers-reduce-motion -->
+  <div class="background-layer"></div>
+
+  <nav>
+    <div class="brand-container">
+      <a href="index.html" class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7"></rect>
+          <circle cx="8.5" cy="8.5" r="2.5"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <span class="brand-text">CLEANDATAFLOW</span>
+      </a>
+    </div>
+
+    <ul class="nav-links">
+      <li><a href="index.html">HOME</a></li>
+      <li><a href="stocks.html">STOCKS</a></li>
+      <li><a href="stock-analysis.html">STOCK ANALYSER</a></li>
+      <li><a href="wishlist.html" class="active">WISHLIST</a></li>
+    </ul>
+
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle dark/light mode">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="moonIcon" style="display:block">
+        <circle cx="12" cy="12" r="5"></circle>
+        <line x1="12" y1="1" x2="12" y2="3"></line>
+        <line x1="12" y1="21" x2="12" y2="23"></line>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+        <line x1="1" y1="12" x2="3" y2="12"></line>
+        <line x1="21" y1="12" x2="23" y2="12"></line>
+        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+      </svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="sunIcon" style="display:none">
+        <circle cx="12" cy="12" r="5"></circle>
+        <line x1="12" y1="1" x2="12" y3="3"></line>
+        <line x1="12" y1="21" x2="12" y2="23"></line>
+        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+        <line x1="1" y1="12" x2="3" y2="12"></line>
+        <line x1="21" y1="12" x2="23" y2="12"></line>
+      </svg>
+    </button>
+  </nav>
+
+  <main>
+    <div class="wishlist-page">
+      <h1>Wishlist</h1>
+
+      <p>Your tracked stocks will appear here.</p>
+
+      <div style="background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:24px; max-width:600px; margin:0 auto;">
+        <p style="color:var(--text-muted); font-size:14px; margin:0 0 16px;">
+          No stocks in your wishlist yet. Use the Stock Analyser to examine stocks and add them to your watchlist manually.
+        </p>
+
+        <form id="addStockForm" style="margin-top:24px;">
+          <div style="display:flex; gap:12px; margin-bottom:12px;">
+            <input
+              type="text"
+              id="wishlistSymbol"
+              placeholder="RELIANCE, TCS, INFY..."
+              style="flex:1; padding:10px 12px; border:1px solid var(--border-mute); border-radius:var(--radius-sm); background:var(--bg-input); color:var(--text-primary); font-size:14px;">
+            <button type="submit" class="btn-primary" style="min-width:120px;">Add to Wishlist</button>
+          </div>
+          <p style="font-size:12px; color:var(--text-muted);">
+            Wishlist stored in browser localStorage. Not a real portfolio or recommendation.
+          </p>
+        </form>
+      </div>
+    </div>
+  </main>
+
+  <script src="script.js"></script>
+  <script>
+    // ---------- Theme toggle ----------
+    document.addEventListener('DOMContentLoaded', () => {
+      const themeToggle = document.getElementById('themeToggle');
+      const moonIcon = document.getElementById('moonIcon');
+      const sunIcon = document.getElementById('sunIcon');
+
+      if (!themeToggle) return;
+
+      const savedTheme = localStorage.getItem('clean-data-theme');
+      const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+
+      if (savedTheme === 'light') {
+        document.body.classList.add('light');
+        moonIcon.style.display = 'none';
+        sunIcon.style.display = 'block';
+      } else if (savedTheme === 'dark') {
+        document.body.classList.remove('light');
+        moonIcon.style.display = 'block';
+        sunIcon.style.display = 'none';
+      } else {
+        if (prefersLight) {
+          document.body.classList.add('light');
+          moonIcon.style.display = 'none';
+          sunIcon.style.display = 'block';
+        }
+      }
+
+      themeToggle.addEventListener('click', () => {
+        if (document.body.classList.contains('light')) {
+          document.body.classList.remove('light');
+          localStorage.setItem('clean-data-theme', 'dark');
+          moonIcon.style.display = 'block';
+          sunIcon.style.display = 'none';
+        } else {
+          document.body.classList.add('light');
+          localStorage.setItem('clean-data-theme', 'light');
+          moonIcon.style.display = 'none';
+          sunIcon.style.display = 'block';
+        }
+      });
+    });
+  </script>
+</body>
+</html>
