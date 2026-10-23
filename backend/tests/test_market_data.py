@@ -8,6 +8,8 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
+import market_cache
+import market_manager
 from market_data import (
     ALLOWED_INTERVALS,
     ALLOWED_PERIODS,
@@ -16,6 +18,22 @@ from market_data import (
     supported_periods_for_interval,
     validate_period_interval,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_market_pipeline():
+    """Keep cache/manager state from leaking between tests.
+
+    fetch_history now goes through the shared market cache and manager, so
+    every test starts from an empty cache and clean provider health — each
+    test exercises its own mock without serving another test's result.
+    """
+    market_cache.clear()
+    manager = market_manager.get_manager()
+    manager.reset_health()
+    yield
+    market_cache.clear()
+    manager.reset_health()
 
 
 class TestSymbolValidation:

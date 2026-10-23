@@ -1,12 +1,34 @@
-"""Free-first historical market data provider using Yahoo Finance via yfinance."""
+"""Provider-routed historical market data for Clean Data Flow.
+
+Historically this module fetched everything directly from Yahoo Finance via
+yfinance. It now keeps the exact same public surface — ``fetch_history``,
+``validate_period_interval``, ``MarketDataUnavailable``, the supported
+period/interval tables — while delegating the fetch to the central manager
+(``market_manager``), which can distribute requests across multiple verified
+providers with shared caching and honest fallback:
+
+* Yahoo Finance via yfinance — always available, unchanged behaviour.
+* Twelve Data — adapter implemented; free tier does not cover Indian
+  exchanges, so it stays disabled for NSE/BSE until configured for a
+  plan that genuinely supports them (``TWELVEDATA_ENABLE_INDIA=1``).
+* Alpha Vantage — adapter implemented; free tier verified for BSE
+  daily/weekly/monthly (25 requests/day). NSE stays disabled pending
+  verification (``ALPHAVANTAGE_ENABLE_NSE=1`` opts in for testing).
+
+The response shape for callers does not change: same keys, same bar format,
+same exception types (``ValueError`` for user errors, ``MarketDataUnavailable``
+for upstream failures). Cache hits honestly keep the original ``fetchedAt``;
+stale entries are always labelled as stale.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
-import yfinance as yf
-
+# Kept as a module attribute for backward compatibility: existing tests patch
+# "market_data.yf.Ticker", and the provider adapter resolves the shared
+# yfinance module through it, so the patch surface is unchanged.
+import yfinance as yf  # noqa: F401
 
 EXCHANGE_SUFFIXES = {"NSE": ".NS", "BSE": ".BO"}
 ALLOWED_PERIODS = {"1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"}
@@ -57,10 +79,16 @@ def validate_period_interval(period: str, interval: str) -> None:
 
 
 class MarketDataUnavailable(Exception):
-    """Raised when the upstream provider has no usable history."""
+    """Raised when the upstream providers have no usable history."""
 
 
 def fetch_history(symbol: str, exchange: str, period: str, interval: str) -> dict[str, Any]:
+    """Fetch provider-sourced OHLCV for one validated request.
+
+    The heavy lifting (routing, shared cache, single-flight, fallback) lives in
+    ``market_manager``; this facade keeps the historical contract: identical
+    parameter validation, identical response keys, identical exception types.
+    """
     exchange = exchange.upper()
     if exchange not in EXCHANGE_SUFFIXES:
         raise ValueError("exchange must be NSE or BSE")
@@ -73,42 +101,29 @@ def fetch_history(symbol: str, exchange: str, period: str, interval: str) -> dic
     clean_symbol = symbol.strip().upper()
     if not clean_symbol or len(clean_symbol) > 30 or not all(c.isalnum() or c in "-^." for c in clean_symbol):
         raise ValueError("symbol contains unsupported characters")
-    qualified_symbol = clean_symbol if clean_symbol.endswith((".NS", ".BO")) else clean_symbol + EXCHANGE_SUFFIXES[exchange]
 
+    # Imported lazily so the manager (and provider registry) can be monkey-
+    # patched by tests without import-order coupling.
+    from market_manager import NoProviderSucceeded, build_request, get_manager
+
+    request = build_request(clean_symbol, exchange, period, interval)
     try:
-        frame = yf.Ticker(qualified_symbol).history(
-            period=period, interval=interval, auto_adjust=False, timeout=12
+        managed = get_manager().get_history(request)
+    except NoProviderSucceeded as exc:
+        # Preserve the historical upstream-failure contract for main.py:
+        # MarketDataUnavailable -> 502 with an honest reason, never fabricated
+        # data and never a 500 from an internal error type.
+        raise MarketDataUnavailable(str(exc)) from exc
+    response = managed.result.to_response(clean_symbol)
+    response["exchange"] = exchange
+    response["interval"] = interval
+
+    if managed.stale:
+        response["stale"] = True
+        response["freshness"] = (
+            "stale: all configured providers failed this request, so the last "
+            "successful cache entry is served; it was fetched "
+            f"{response['fetchedAt']} and must not be treated as live"
         )
-    except Exception as exc:
-        raise MarketDataUnavailable(f"Yahoo Finance request failed: {exc}") from exc
-
-    if frame is None or frame.empty:
-        raise MarketDataUnavailable(f"No historical price data is available for {qualified_symbol}.")
-
-    bars = []
-    for stamp, row in frame.iterrows():
-        def value(column: str):
-            item = row.get(column)
-            return None if item is None or item != item else float(item)
-
-        timestamp = stamp.to_pydatetime() if hasattr(stamp, "to_pydatetime") else stamp
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        bars.append({
-            "timestamp": timestamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "open": value("Open"), "high": value("High"), "low": value("Low"),
-            "close": value("Close"), "volume": value("Volume"),
-        })
-
-    fetched_at = datetime.now(timezone.utc)
-    return {
-        "symbol": clean_symbol,
-        "providerSymbol": qualified_symbol,
-        "exchange": exchange,
-        "source": "Yahoo Finance via yfinance (free, delayed/interval-dependent; not tick-by-tick)",
-        "interval": interval,
-        "fetchedAt": fetched_at.isoformat().replace("+00:00", "Z"),
-        "lastDataTimestamp": bars[-1]["timestamp"],
-        "freshness": "provider timestamp supplied; delay varies by instrument and interval",
-        "bars": bars,
-    }
+        response["source"] = f"{response['source']} — STALE FALLBACK"
+    return response

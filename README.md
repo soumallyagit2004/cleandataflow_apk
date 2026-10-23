@@ -107,13 +107,103 @@ GET http://127.0.0.1:8000/api/health
 | `ALLOWED_ORIGINS` | backend | Comma-separated list of frontend origins allowed by CORS. **Unset = any origin (the local-development default). Production must set it explicitly**, e.g. `ALLOWED_ORIGINS=https://your-frontend.vercel.app`. |
 | `CDF_TR_CACHE` | backend | `0`/`false`/`off` disables the Transformer result cache (default: enabled). |
 | `CDF_TR_CACHE_TTL` | backend | Transformer cache entry lifetime in seconds (default `900`). Correctness never depends on it: any new bar retrains via the cache key. |
+| `TWELVEDATA_API_KEY` | backend | Optional. Enables the Twelve Data provider. Server-side only. Free "Basic" plan: 8 credits/min, 800/day — **US markets/forex/crypto only; India needs a paid plan** (see Section 7). |
+| `ALPHAVANTAGE_API_KEY` | backend | Optional. Enables the Alpha Vantage provider. Server-side only. Free tier: **25 requests/day, 5/min**; verified for BSE daily/weekly/monthly. |
+| `TWELVEDATA_ENABLE_INDIA` | backend | Default `0`. Set `1` only with a Twelve Data plan that genuinely covers NSE/BSE. |
+| `ALPHAVANTAGE_ENABLE_NSE` | backend | Default `0`. Set `1` only after live-verifying NSE history with your own key. |
+| `ALPHAVANTAGE_ENABLE_INTRADAY` | backend | Default `0`. Alpha Vantage intraday stays off; daily/weekly/monthly are the verified capability. |
+| `CDF_MARKET_ROUTING` | backend | `round_robin` (default), `weighted` or `first_available` distribution across the enabled providers. |
+| `CDF_PROVIDER_WEIGHT_<NAME>` | backend | Weighted-mode weights (`_YAHOO`, `_TWELVEDATA`, `_ALPHAVANTAGE`; defaults 60/25/15). |
+| `CDF_ENABLE_YAHOO` / `CDF_ENABLE_TWELVEDATA` / `CDF_ENABLE_ALPHAVANTAGE` | backend | Per-provider on/off overrides (default `1`; missing credentials already disable a provider). |
+| `TWELVEDATA_MAX_REQUESTS_PER_MINUTE` | backend | Client-side credit budget (default `8`, the free plan limit). |
+| `ALPHAVANTAGE_MAX_REQUESTS_PER_DAY` / `_PER_MINUTE` | backend | Client-side quota budgets (defaults `25` / `5`). |
+| `CDF_MARKET_CACHE` | backend | `0` disables the shared market cache entirely (default: enabled). |
+| `CDF_MARKET_CACHE_MAX_ENTRIES` | backend | Shared cache LRU bound (default `512`). |
+| `CDF_MARKET_STALE_FALLBACK` | backend | When every provider fails, serve an existing cache entry clearly labelled stale (default `1`). |
+| `CDF_MARKET_STALE_MAX_HOURS` | backend | Maximum age of a stale fallback payload in hours (default `24`). |
 | `PORT` | backend (host) | Procfile hosts supply it automatically; used by `$PORT` in the Procfile. |
 | — | frontend | There are **no secrets in the frontend**. The backend URL is the only frontend setting: `frontend/config.js` → `window.CDF_API_BASE`. |
 
 Copy `backend/.env.example` to `backend/.env` if you want file-based env config
 locally (never commit the real `.env`).
 
-## 7. Running tests
+## 7. Multi-provider market data
+
+Market-data requests are no longer hard-wired to Yahoo Finance. A central
+manager (`market_manager.py`) routes every request to exactly one eligible
+provider, with automatic fallback when a provider fails — different symbols,
+exchanges, intervals or history windows are never treated as interchangeable,
+and no request ever fetches the same candles from multiple providers.
+
+### Providers, verified coverage and defaults
+
+| Provider | Verified coverage (from official docs) | Default state | Notes |
+|---|---|---|---|
+| **Yahoo Finance** (`yfinance`) | What shipped originally: NSE (`.NS`) and BSE (`.BO`) via exchange suffixes; intervals 1m…1mo (`INTERVAL_PERIODS` in `market_data.py`), including Yahoo-only extras (2m, 90m, 5d, 3mo). | Always on, priority default | Unchanged behaviour, same `source`/`freshness` strings. |
+| **Twelve Data** | Free "Basic" plan: 8 credits/min, 800/day, but only **3 market groups (US/forex/crypto)** — India needs the paid Ultra plan. Adapter supports intervals 1m, 5m, 15m, 30m, 60m/1h, 1d, 1wk, 1mo. | **India disabled by default** (`TWELVEDATA_ENABLE_INDIA=0`). Activate only with a plan that covers NSE/BSE. Plan-coverage errors are classified at runtime and the manager falls back on the same request. |
+| **Alpha Vantage** | Free tier: **25 req/day, 5/min**. Official India examples verify **BSE daily/weekly/monthly** (`RELIANCE.BSE`). `.NSE` is NOT verified (official docs only show BSE; third-party reports of NSE failing); free-tier intraday for India is plan-dependent. | **Enabled for BSE daily/weekly/monthly** once a key exists; **NSE disabled by default** (`ALPHAVANTAGE_ENABLE_NSE=0`), **intraday disabled by default** (`ALPHAVANTAGE_ENABLE_INTRADAY=0`). |
+
+Nothing pretends a provider can do what it cannot: capability checks run
+*before* a request is sent, unsupported stays disabled, and errors are mapped
+honestly (auth → hard cooldown, quota → short cooldown, plan/market gaps →
+capability disable, bad payloads → try the next provider).
+
+### Routing, quota awareness, fallback
+
+* Routing modes: `round_robin` (default, rotates per exchange+interval slot),
+  `weighted` (deterministic weighted rotation via `CDF_PROVIDER_WEIGHT_*`,
+  defaults 60/25/15), `first_available` (registry order, fallback only).
+* Client-side quota budgeting for keyed providers (Twelve Data 8/min;
+  Alpha Vantage 25/day + 5/min) — a provider whose budget is spent is skipped
+  for that request instead of burning rejected hits upstream.
+* Health tracking: consecutive-failure backoff (30 s → 300 s cap at ≥3
+  failures), 120 s cooldown after rate-limit hits, 6 h cooldown after an auth
+  rejection. A smoothed latency average feeds diagnostics (`snapshot()`).
+* Recovery-fallback order: one provider at a time, both failures recorded in
+  the response/error text. Parallel calls are not needed in the normal flow.
+
+### Shared cache (no external infrastructure; plain process memory + LRU)
+
+* Keys contain the exact `(symbol, exchange, interval, period)` request.
+* TTLs follow Indian market hours (09:15–15:30 IST Mon–Fri): in-session
+  intraday 60 s, daily+ 15 min; after close until the next session start,
+  capped at 12 h (intraday) / 72 h (daily). Weekends never renew.
+* Single-flight: concurrent identical requests share one upstream call.
+* Failed fetches are never cached as data. When *every* provider fails and a
+  previous entry exists, it is served under the explicit stale policy and
+  labelled: `stale: true`, `freshness: "stale: …"`, `source: "… — STALE
+  FALLBACK"` — never represented as live. `CDF_MARKET_STALE_FALLBACK=0`
+  restores the historical all-fail → 502 behaviour.
+* Cache hits honestly keep the original `fetchedAt`; `lastDataTimestamp`
+  stays the provider's own candle stamp. Analysis is always recomputed from
+  the returned bars, so any dataset change automatically re-runs every
+  indicator (the Transformer cache keys on bar content and retrains on new
+  bars — unchanged).
+
+### Response contract (unchanged keys, additive fields)
+
+`/api/market/history` returns the same keys as before (`symbol`,
+`providerSymbol`, `exchange`, `source`, `interval`, `fetchedAt`,
+`lastDataTimestamp`, `freshness`, `bars`, plus `analysis`/
+`historical_anomalies`), and adds two optional diagnostics:
+`providerChain` (providers attempted, in order) and — only on stale
+fallback — `stale: true`. The frontend reads the existing fields and
+ignores the new ones; no frontend change is required.
+
+### What is NOT verified (and therefore stays off)
+
+* **Twelve Data for NSE/BSE** on the free plan — the plan does not include
+  India. The adapter is implemented and covered by mocked tests, but no live
+  request with a real key has ever been made here, so without your own
+  verification it stays gated (`TWELVEDATA_ENABLE_INDIA`).
+* **Alpha Vantage `.NSE`** — unverified (BSE only is documented). Gate:
+  `ALPHAVANTAGE_ENABLE_NSE`.
+* **Alpha Vantage intraday for India** — plan-dependent per the docs. Gate:
+  `ALPHAVANTAGE_ENABLE_INTRADAY`.
+* Yahoo remains the default because it serves NSE+BSE without any key; other
+  providers activate only as optional fallback capacity.
+
+## 8. Running tests
 
 Backend (from `backend/`):
 
@@ -128,7 +218,7 @@ node frontend\tests\chart-utils.test.js
 python frontend\tests\check_frontend.py
 ```
 
-## 8. Deployment architecture
+## 9. Deployment architecture
 
 The frontend and backend are deployed **separately**:
 
@@ -141,7 +231,7 @@ The frontend and backend are deployed **separately**:
   CPU-heavy (see limitations), so the host needs to allow requests of at
   least ~10–60 s and must not hard-kill CPU work.
 
-## 9. Deployment commands
+## 10. Deployment commands
 
 ### Frontend (Vercel, no build)
 
@@ -173,18 +263,18 @@ redeploy the frontend, then finish the backend's `ALLOWED_ORIGINS` with the
 final frontend URL. Both sides must agree or browsers will block the API
 calls (visible as "Cannot reach the … backend" messages).
 
-## 10. Common errors and fixes
+## 11. Common errors and fixes
 
 | Symptom | Fix |
 |---|---|
 | Page says "Cannot reach the FastAPI backend at http://localhost:8000 …" locally | The backend is not running: start it with the Section-5 uvicorn command. |
 | Same message on the deployed site | `config.js` still points at localhost — change `window.CDF_API_BASE` to the public backend URL and redeploy the frontend. |
 | API calls blocked by CORS | The backend's `ALLOWED_ORIGINS` does not contain the frontend URL. Set it (comma-separate multiple) and redeploy the backend. |
-| `502` on `/api/market/history` | Upstream Yahoo Finance failed or is rate-limiting; retry shortly. No dummy data is ever returned. |
+| `502` on `/api/market/history` | Every enabled market-data provider failed or is rate-limited; retry shortly. If an old cache entry exists, it is served clearly labelled `stale` (set `CDF_MARKET_STALE_FALLBACK=0` to restore the plain-502 behaviour). No dummy data is ever returned. |
 | `/api/market/oi` says data unavailable | True honesty: the official NSE F&O bhavcopy publishes after the session; weekends/holidays have no file. |
-| 5Y analysis very slow (Transformer) | First call per symbol/timeframe trains once (~6 s workstation); identical repeat calls are served from the result cache. Still slow every time? `CDF_TR_CACHE=0` may be set in the environment — see Section 11. |
+| 5Y analysis very slow (Transformer) | First call per symbol/timeframe trains once (~6 s workstation); identical repeat calls are served from the result cache. Still slow every time? `CDF_TR_CACHE=0` may be set in the environment — see Section 12. |
 
-## 11. Known limitations
+## 12. Known limitations
 
 * **Latest-only neural detectors.** Autoencoder and Transformer score only the
   latest complete bar (retraining per historical candle would be prohibitively
@@ -212,7 +302,7 @@ calls (visible as "Cannot reach the … backend" messages).
   every unavailable state is reported instead of papered over.
 * **Open interest is end-of-day** NSE-only and never live/intraday.
 
-## 12. Pointing the public frontend at the public backend
+## 13. Pointing the public frontend at the public backend
 
 In one line: set `window.CDF_API_BASE` in `frontend/config.js` to the
 backend's public `https://...` URL and redeploy the frontend. That constant is
