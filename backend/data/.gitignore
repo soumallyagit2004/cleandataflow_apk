@@ -1,0 +1,2 @@
+# Locally stored feedback (runtime data, never commit).
+feedback.jsonl

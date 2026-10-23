@@ -5,9 +5,10 @@
  * vendored TradingView Lightweight Charts build. No price, candle, indicator
  * or anomaly value is generated on the client.
  *
- * Initial interface contract: exactly two visible controls — the symbol input
- * (with autocomplete) and the "Stock Analysis" button. Exchange/period/interval
- * remain functional but hidden, with NSE / 3mo / 1d as defaults.
+ * The search stage exposes the symbol input (with autocomplete), exchange,
+ * period, interval, the primary "Analyse Stock" action and a secondary Reset.
+ * Results are revealed only after a successful backend response; the
+ * pre-analysis panel contains no prices or scores.
  */
 
 const API_ROOT =
@@ -28,10 +29,23 @@ const els = {
   period: document.getElementById("periodSelect"),
   interval: document.getElementById("intervalSelect"),
   analyzeBtn: document.getElementById("analyzeBtn"),
+  analyzeLabel: document.getElementById("analyzeBtnLabel"),
+  resetBtn: document.getElementById("resetBtn"),
   status: document.getElementById("analysisStatus"),
   selectionNote: document.getElementById("selectionNote"),
   searchStage: document.getElementById("searchStage"),
+  preAnalysis: document.getElementById("preAnalysis"),
   dashboardStage: document.getElementById("dashboardStage"),
+  resultSummary: document.getElementById("resultSummary"),
+  resultTitle: document.getElementById("resultTitle"),
+  resultSub: document.getElementById("resultSub"),
+  resultLast: document.getElementById("resultLast"),
+  resultLastDate: document.getElementById("resultLastDate"),
+  resultChange: document.getElementById("resultChange"),
+  resultWindow: document.getElementById("resultWindow"),
+  resultSource: document.getElementById("resultSource"),
+  resultFetched: document.getElementById("resultFetched"),
+  resultFreshness: document.getElementById("resultFreshness"),
   timeframePanel: document.getElementById("timeframePanel"),
   timeframeControls: document.getElementById("timeframeControls"),
   timeframeStatus: document.getElementById("timeframeStatus"),
@@ -186,8 +200,10 @@ function setBusy(isBusy) {
   state.loading = Boolean(isBusy);
   if (els.analyzeBtn) {
     els.analyzeBtn.disabled = Boolean(isBusy);
-    els.analyzeBtn.textContent = isBusy ? "Analysing…" : "Stock Analysis";
     els.analyzeBtn.setAttribute("aria-busy", String(Boolean(isBusy)));
+  }
+  if (els.analyzeLabel) {
+    els.analyzeLabel.textContent = isBusy ? "Analysing…" : "Analyse Stock";
   }
   if (els.form) els.form.setAttribute("aria-busy", String(Boolean(isBusy)));
   if (els.dashboardStage) {
@@ -199,6 +215,15 @@ function setBusy(isBusy) {
       .forEach((button) => {
         button.disabled = Boolean(isBusy);
       });
+  }
+}
+
+function setSymbolInvalid(invalid) {
+  if (!els.symbol) return;
+  if (invalid) {
+    els.symbol.setAttribute("aria-invalid", "true");
+  } else {
+    els.symbol.removeAttribute("aria-invalid");
   }
 }
 
@@ -322,7 +347,7 @@ function syncUrl(selection) {
 }
 
 function restoreFromUrl() {
-  if (!CU) return;
+  if (!CU) return null;
   const params = new URLSearchParams(window.location.search);
   const selection = CU.selectionFromParams(params, {
     exchange: "NSE",
@@ -338,9 +363,65 @@ function restoreFromUrl() {
     }
     setStatus(
       "info",
-      `Loaded ${selection.symbol} from the link. Click Stock Analysis to run it.`
+      `Loaded ${selection.symbol} from the link. Select Analyse Stock to run it.`
     );
   }
+  return selection;
+}
+
+function resetSearch() {
+  cancelActiveRequest();
+  clearResults();
+  hideStatus();
+  hideSelectionNote();
+  closeSuggestions();
+
+  if (els.symbol) {
+    els.symbol.value = "";
+    setSymbolInvalid(false);
+  }
+  if (els.exchange) els.exchange.value = "NSE";
+  if (els.period) els.period.value = "3mo";
+  if (els.interval) els.interval.value = "1d";
+
+  try {
+    window.history.replaceState(null, "", window.location.pathname);
+  } catch (error) {
+    /* file:// and embedded browsers may reject history updates. */
+  }
+
+  if (els.symbol) els.symbol.focus();
+}
+
+function autorunSelection(restored) {
+  if (!restored || !restored.symbol) return;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("autorun") !== "1") return;
+
+  const check = CU.validateSymbol(restored.symbol);
+  if (!check.valid) {
+    setSymbolInvalid(true);
+    setStatus("error", check.message || "The linked symbol is not valid.");
+    return;
+  }
+
+  const reconciled = CU.reconcileSelection(
+    restored.period,
+    restored.interval,
+    "period"
+  );
+  const selection = {
+    symbol: check.symbol,
+    exchange: restored.exchange,
+    period: reconciled.period,
+    interval: reconciled.interval,
+  };
+  if (reconciled.changed) {
+    applySelection(selection);
+    showSelectionNote(reconciled.message);
+  }
+  syncUrl(selection);
+  runAnalysis(selection);
 }
 
 /* ==========================================================================
@@ -425,7 +506,7 @@ function renderSuggestionMatches(value) {
   const items = stockUniverse.items || [];
   if (!items.length) {
     suggestionMessage(
-      "Autocomplete is unavailable right now. Type the exact NSE symbol (for example RELIANCE) and click Stock Analysis."
+      "Autocomplete is unavailable right now. Type the exact NSE symbol (for example RELIANCE) and select Analyse Stock."
     );
     return;
   }
@@ -433,8 +514,12 @@ function renderSuggestionMatches(value) {
   const starts = [];
   const contains = [];
   items.forEach((item) => {
-    const symbol = item.symbol;
-    const name = item.name.toUpperCase();
+    const symbol = String(item.symbol || "").toUpperCase();
+    const displayName =
+      typeof displayConstituentName === "function"
+        ? displayConstituentName(item)
+        : item.name;
+    const name = `${item.name || ""} ${displayName || ""}`.toUpperCase();
     if (symbol === query || symbol.startsWith(query)) starts.push(item);
     else if (name.includes(query) || symbol.includes(query)) contains.push(item);
   });
@@ -455,7 +540,7 @@ function renderSuggestionMatches(value) {
           ? displayConstituentName(item)
           : item.name;
       const nameHtml =
-        displayName && displayName !== "NSE"
+        displayName && displayName !== "NSE" && displayName !== "NSE equity"
           ? `<span class=\"suggestion-name\">${escapeHtml(displayName)}</span>`
           : "";
       return `
@@ -850,7 +935,7 @@ function markerTooltipHtml(cluster) {
         .map(([key, value]) => markerValueHtml(key, value))
         .join("");
       const sourceLabel =
-        point.source === "latest" ? "Latest complete bar" : "Historical";
+        point.source === "latest" ? "Latest returned bar" : "Historical";
       return `<section class="marker-detail">
         <header>
           <span class="marker-dot" aria-hidden="true"></span>
@@ -1013,7 +1098,7 @@ function renderChartLegend(bar) {
   const volume = bar.volume === null ? "—" : fmtVolume(bar.volume);
 
   els.chartLegend.innerHTML = `
-    <span class="legend-tag">${isLatest ? "Latest complete" : "Selected"}</span>
+    <span class="legend-tag">${isLatest ? "Latest returned" : "Selected"}</span>
     <span class="legend-date">${escapeHtml(fmtTime(bar.timestamp))}</span>
     <span class="legend-item"><span class="legend-label">O</span>${fmtValue(bar.open)}</span>
     <span class="legend-item"><span class="legend-label">H</span>${fmtValue(bar.high)}</span>
@@ -1129,12 +1214,12 @@ function renderChartNote(mapped, data, hasVolume) {
   if (mapped.lastRaw && !mapped.lastRawHasOHLC) {
     notes.push(
       "The latest returned bar is incomplete (missing or invalid OHLC) and is " +
-        "not drawn. Anomaly detectors evaluate the latest complete bar."
+        "not drawn. Anomaly detectors evaluate the latest bar with usable OHLCV."
     );
   } else if (mapped.lastRaw && !mapped.lastRawComplete) {
     notes.push(
       "The latest returned bar has no usable volume, so it is drawn as a " +
-        "candle but anomaly detectors evaluate the latest complete OHLCV bar."
+        "candle but anomaly detectors evaluate the latest bar with usable OHLCV."
     );
   }
 
@@ -1150,7 +1235,7 @@ function renderChartNote(mapped, data, hasVolume) {
   if (excluded > 0) {
     notes.push(
       `The anomaly detectors excluded ${excluded} trailing incomplete bar(s) ` +
-        `and scored the latest complete bar.`
+        `and scored the latest usable bar.`
     );
   }
   if (!hasVolume) {
@@ -1196,7 +1281,7 @@ function anomalyDetail(entry, interval) {
   const parts = [];
 
   if (entry.scope === "latest_only") {
-    parts.push("latest complete bar only");
+    parts.push("latest usable bar only");
   } else if (entry.historicalAvailable) {
     const count = Number(entry.historicalPoints) || 0;
     const detected =
@@ -1343,7 +1428,8 @@ function renderChart(data, mapped) {
     ? CU.buildAnomalyMarkers(
         data.analysis,
         mapped.bars,
-        data.historical_anomalies
+        data.historical_anomalies,
+        { maximumLabels: 10 }
       )
     : null;
   state.markerResult = markerResult;
@@ -1363,7 +1449,7 @@ function renderChart(data, mapped) {
   if (!mapped.bars.length) {
     if (els.priceChart) {
       els.priceChart.innerHTML =
-        '<div class="chart-empty">No complete OHLC bars were returned, so no ' +
+        '<div class="chart-empty">No usable OHLCV bars were returned, so no ' +
         "candlestick or volume chart was drawn. Try a longer period or a " +
         "different symbol.</div>";
     }
@@ -1463,16 +1549,23 @@ function renderMeta(data, mapped, selection) {
     ["Requested period", CU.periodLabel(selection.period)],
     ["Requested interval", CU.intervalLabel(selection.interval)],
     ["Bars returned", String(mapped.total)],
-    ["Complete bars drawn", String(mapped.bars.length)],
-    ["Bars not drawn", String(omitted)],
-    ["Latest complete close", latest ? fmtValue(latest.close) : "—"],
-    ["Latest complete bar", latest ? fmtTime(latest.timestamp) : "—"],
+    ["Bars with usable OHLCV", String(mapped.bars.length)],
+    ["Bars skipped", String(omitted)],
+    ["Latest returned close", latest ? fmtValue(latest.close) : "—"],
+    ["Latest returned bar", latest ? fmtTime(latest.timestamp) : "—"],
     [
       "Last raw bar timestamp",
       data.lastDataTimestamp ? fmtTime(data.lastDataTimestamp) : "—",
     ],
     ["Anomaly trailing bars excluded", String(excluded)],
     ["Source", data.source || "Yahoo Finance via the backend"],
+    [
+      "Provider chain",
+      Array.isArray(data.providerChain) && data.providerChain.length
+        ? data.providerChain.join(" → ")
+        : "Not reported by the backend",
+    ],
+    ["Freshness note", data.freshness || "Not reported by the backend"],
     ["Fetched at", fmtDateTime(data.fetchedAt)],
   ];
 
@@ -1569,7 +1662,7 @@ function smaCard(sma, rawBarCount, completeBarCount) {
     return card(
       "SMA",
       "unavailable",
-      `<p class="explain">The backend marked SMA unavailable. ${completeBarCount} complete bar(s) were drawn from ${rawBarCount} returned bar(s); this SMA needs ${period} usable closes. Try a longer period or a different symbol.</p>
+      `<p class="explain">The backend marked SMA unavailable. ${completeBarCount} bar(s) with usable OHLCV were drawn from ${rawBarCount} returned bar(s); this SMA needs ${period} usable closes. Try a longer period or a different symbol.</p>
        ${methodText(sma && sma.method)}`,
       "Unavailable",
       "unavailable"
@@ -1594,7 +1687,7 @@ function rsiCard(rsi, rawBarCount, completeBarCount) {
     return card(
       "RSI",
       "unavailable",
-      `<p class="explain">The backend marked RSI unavailable. ${completeBarCount} complete bar(s) were drawn from ${rawBarCount} returned bar(s); RSI needs more than ${period} usable closes. Try a longer period.</p>
+      `<p class="explain">The backend marked RSI unavailable. ${completeBarCount} bar(s) with usable OHLCV were drawn from ${rawBarCount} returned bar(s); RSI needs more than ${period} usable closes. Try a longer period.</p>
        ${methodText(rsi && rsi.method)}`,
       "Unavailable",
       "unavailable"
@@ -1926,7 +2019,7 @@ function anomalyCard(config, block) {
     ${featureTable(block.latest_prediction, "Predicted feature values")}
     ${explainText(block.explanation)}
     ${methodText(block.method)}
-    <p class="method">Scores only the latest complete bar. A statistical anomaly is not proof of manipulation.</p>
+    <p class="method">Scores only the latest bar with usable OHLCV. A statistical anomaly is not proof of manipulation.</p>
   `;
 
   return card(
@@ -1945,6 +2038,20 @@ function noticeCard(title, message) {
   </article>`;
 }
 
+function analysisGroup(title, note, content) {
+  if (!content) return "";
+  return `<details class="analysis-group" open>
+    <summary class="analysis-group-summary" title="Expand or collapse this group">
+      <div class="analysis-group-head">
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(note)}</p>
+      </div>
+      <span class="group-chevron" aria-hidden="true"></span>
+    </summary>
+    <div class="analysis-grid">${content}</div>
+  </details>`;
+}
+
 function renderAnalysis(analysis, rawBarCount, completeBarCount) {
   const blocks = analysis && typeof analysis === "object" ? analysis : null;
   const notices = [];
@@ -1960,24 +2067,37 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
   if (completeBarCount === 0) {
     notices.push(
       noticeCard(
-        "No complete bars",
-        `${rawBarCount} bar(s) were returned, but none had complete OHLC values. Indicators and anomaly detectors cannot be computed honestly.`
+        "No usable OHLCV bars",
+        `${rawBarCount} bar(s) were returned, but none had usable OHLCV values. Indicators and anomaly detectors cannot be computed honestly.`
       )
     );
   }
 
-  const indicatorCards = [
+  const trendCards = [
     smaCard(blocks && blocks.sma, rawBarCount, completeBarCount),
     rsiCard(blocks && blocks.rsi, rawBarCount, completeBarCount),
     fibonacciCard(blocks && blocks.fibonacci),
     emaDeviationCard(blocks && blocks.ema_deviation),
+  ];
+  const volumeCards = [
     divergenceCard(blocks && blocks.volume_price_divergence),
     volumeSpikeCard(blocks && blocks.volume_spike),
     volatilityAnomalyCard(blocks && blocks.volatility_anomaly),
   ];
 
   if (els.indicatorGrid) {
-    els.indicatorGrid.innerHTML = notices.join("") + indicatorCards.join("");
+    els.indicatorGrid.innerHTML =
+      notices.join("") +
+      analysisGroup(
+        "Trend & technical indicators",
+        "Computed from the returned closes and range. A latest-only level is a price line, not a historical series.",
+        trendCards.join("")
+      ) +
+      analysisGroup(
+        "Volume & price behaviour",
+        "Compares recent participation with the returned baseline. Unusual volume is not automatically manipulation.",
+        volumeCards.join("")
+      );
   }
 
   const anomalyCards = CU
@@ -1987,7 +2107,11 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
     : [];
 
   if (els.anomalyGrid) {
-    els.anomalyGrid.innerHTML = notices.join("") + anomalyCards.join("");
+    els.anomalyGrid.innerHTML = analysisGroup(
+      "Model outputs",
+      "LOF, autoencoder and transformer outputs are reported as returned. Latest-only models are never drawn backwards through history.",
+      anomalyCards.join("")
+    );
   }
 }
 
@@ -1998,6 +2122,7 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
 function clearResults() {
   destroyChart();
   state.loadedSelection = null;
+  state.selection = null;
   if (els.metaList) els.metaList.innerHTML = "";
   if (els.metaBadge) {
     els.metaBadge.textContent = "";
@@ -2006,9 +2131,109 @@ function clearResults() {
   if (els.indicatorGrid) els.indicatorGrid.innerHTML = "";
   if (els.anomalyGrid) els.anomalyGrid.innerHTML = "";
   if (els.timeframeControls) els.timeframeControls.innerHTML = "";
+  if (els.resultTitle) els.resultTitle.textContent = "—";
+  if (els.resultSub) {
+    els.resultSub.textContent = "Symbol, exchange and provider will appear here.";
+  }
+  if (els.resultLast) els.resultLast.textContent = "—";
+  if (els.resultLastDate) els.resultLastDate.textContent = "—";
+  if (els.resultChange) {
+    els.resultChange.textContent = "—";
+    els.resultChange.className = "";
+  }
+  if (els.resultWindow) els.resultWindow.textContent = "—";
+  if (els.resultSource) {
+    els.resultSource.textContent = "—";
+    els.resultSource.removeAttribute("title");
+  }
+  if (els.resultFetched) els.resultFetched.textContent = "Fetched time unavailable";
+  if (els.resultFreshness) {
+    els.resultFreshness.textContent = "Historical data · not live";
+    els.resultFreshness.className = "freshness-pill";
+    els.resultFreshness.removeAttribute("title");
+  }
   setTimeframeStatus("", "");
   setChartRefreshing(false);
   if (els.dashboardStage) els.dashboardStage.classList.add("hidden");
+  if (els.preAnalysis) els.preAnalysis.classList.remove("hidden");
+}
+
+function renderResultSummary(data, selection, mapped) {
+  const latest = mapped.bars.length
+    ? mapped.bars[mapped.bars.length - 1]
+    : null;
+  const previous =
+    mapped.bars.length > 1 ? mapped.bars[mapped.bars.length - 2] : null;
+
+  const change =
+    latest && previous ? latest.close - previous.close : null;
+  const changePercent =
+    latest && previous && previous.close !== 0
+      ? ((latest.close - previous.close) / previous.close) * 100
+      : null;
+
+  if (els.resultTitle) {
+    els.resultTitle.textContent = `${selection.symbol} · ${selection.exchange}`;
+  }
+  if (els.resultSub) {
+    els.resultSub.textContent = `${data.symbol || selection.symbol}${
+      data.providerSymbol ? ` (${data.providerSymbol})` : ""
+    } · ${CU.periodLabel(selection.period)} of ${CU.intervalLabel(
+      data.interval || selection.interval
+    )} bars`;
+  }
+  if (els.resultLast) {
+    els.resultLast.textContent = latest ? fmtValue(latest.close) : "—";
+  }
+  if (els.resultLastDate) {
+    els.resultLastDate.textContent = latest
+      ? `Latest returned bar: ${fmtTime(latest.timestamp)}`
+      : "No usable bars";
+  }
+  if (els.resultChange) {
+    if (change === null) {
+      els.resultChange.textContent = "Not enough usable bars";
+      els.resultChange.className = "";
+    } else {
+      els.resultChange.textContent = `${fmtSignedValue(change)} (${fmtSignedValue(
+        changePercent
+      )}%)`;
+      els.resultChange.className =
+        change > 0 ? "change-positive" : change < 0 ? "change-negative" : "";
+    }
+  }
+  if (els.resultWindow) {
+    els.resultWindow.textContent = `${CU.periodLabel(
+      selection.period
+    )} · ${CU.intervalLabel(data.interval || selection.interval)}`;
+  }
+  if (els.resultSource) {
+    els.resultSource.textContent = data.source || "Provider not specified";
+    els.resultSource.title = data.source || "Provider not specified";
+  }
+  if (els.resultFetched) {
+    els.resultFetched.textContent = `Fetched ${fmtDateTime(
+      data.fetchedAt
+    )}${
+      data.lastDataTimestamp
+        ? ` · last raw bar ${fmtTime(data.lastDataTimestamp)}`
+        : ""
+    }`;
+  }
+  if (els.resultFreshness) {
+    const interval = data.interval || selection.interval;
+    const intraday = CU.isIntraday(interval);
+    els.resultFreshness.textContent = intraday
+      ? "Intraday history · not a live tick feed"
+      : "Daily bars · delayed, not live";
+    els.resultFreshness.className = "freshness-pill";
+    els.resultFreshness.title =
+      (intraday
+        ? ""
+        : "Daily bars can include the current, still-forming session while the market is open. ") +
+      (data.freshness ||
+        "The backend did not supply a separate freshness note for this response.");
+  }
 }
 
 function renderResult(data, selection, mapped) {
@@ -2016,6 +2241,7 @@ function renderResult(data, selection, mapped) {
   state.loadedSelection = { ...selection };
   state.interval = data.interval || selection.interval;
 
+  renderResultSummary(data, selection, mapped);
   renderMeta(data, mapped, selection);
   renderAnalysis(
     data.analysis,
@@ -2023,13 +2249,35 @@ function renderResult(data, selection, mapped) {
     mapped.bars.length
   );
 
+  if (els.preAnalysis) els.preAnalysis.classList.add("hidden");
   if (els.dashboardStage) els.dashboardStage.classList.remove("hidden");
+
+  if (typeof recordRecentAnalysis === "function" && mapped.bars.length) {
+    const latest = mapped.bars[mapped.bars.length - 1];
+    const previous =
+      mapped.bars.length > 1 ? mapped.bars[mapped.bars.length - 2] : null;
+    recordRecentAnalysis({
+      symbol: selection.symbol,
+      exchange: selection.exchange,
+      period: selection.period,
+      interval: data.interval || selection.interval,
+      source: data.source || "",
+      fetchedAt: data.fetchedAt || null,
+      barTimestamp: latest.timestamp,
+      lastClose: latest.close,
+      changePercent:
+        previous && previous.close !== 0
+          ? ((latest.close - previous.close) / previous.close) * 100
+          : null,
+    });
+  }
+
   renderTimeframeOptions(state.interval, selection.period);
   setTimeframeStatus(
     "success",
     `Loaded ${CU.periodLabel(selection.period)} of ${
       CU.intervalLabel(selection.interval)
-    } bars for ${selection.symbol} · ${mapped.bars.length} complete bar(s) drawn.`
+    } bars for ${selection.symbol} · ${mapped.bars.length} usable bar(s) drawn.`
   );
   renderChart(data, mapped);
 }
@@ -2096,6 +2344,7 @@ async function runAnalysis(selection, options) {
     );
   } else {
     clearResults();
+    if (els.preAnalysis) els.preAnalysis.classList.add("hidden");
   }
 
   setBusy(true);
@@ -2156,18 +2405,18 @@ async function runAnalysis(selection, options) {
     if (mapped.bars.length) {
       setStatus(
         "success",
-        `Analysis complete: ${mapped.bars.length} complete bar(s) drawn from ${mapped.total} returned for ${CU.periodLabel(
+        `Analysis complete: ${mapped.bars.length} usable bar(s) drawn from ${mapped.total} returned for ${CU.periodLabel(
           selection.period
         )}.`
       );
     } else {
       setTimeframeStatus(
         "warning",
-        `${CU.periodLabel(selection.period)} returned no complete OHLC bars; nothing was drawn or invented.`
+        `${CU.periodLabel(selection.period)} returned no usable OHLCV bars; nothing was drawn or invented.`
       );
       setStatus(
         "info",
-        `The backend returned ${mapped.total} bar(s), but none had complete OHLC values. Nothing was drawn or invented.`
+        `The backend returned ${mapped.total} bar(s), but none had usable OHLCV values. Nothing was drawn or invented.`
       );
     }
   } catch (error) {
@@ -2206,6 +2455,7 @@ async function runAnalysis(selection, options) {
         )} chart is still shown. ${message}`
       );
     } else {
+      if (els.preAnalysis) els.preAnalysis.classList.remove("hidden");
       setTimeframeStatus(
         "error",
         `Could not load ${CU.periodLabel(selection.period)}. ${message}`
@@ -2233,6 +2483,7 @@ function wireEvents() {
   els.form.addEventListener("submit", (event) => {
     event.preventDefault();
     hideSelectionNote();
+    setSymbolInvalid(false);
 
     if (state.loading) return;
 
@@ -2242,6 +2493,7 @@ function wireEvents() {
     if (!check.valid) {
       cancelActiveRequest();
       clearResults();
+      setSymbolInvalid(true);
       setStatus("error", check.message || "Enter a stock symbol first.");
       if (els.symbol) els.symbol.focus();
       return;
@@ -2249,6 +2501,7 @@ function wireEvents() {
 
     selection.symbol = check.symbol;
     if (els.symbol) els.symbol.value = check.symbol;
+    setSymbolInvalid(false);
 
     closeSuggestions();
 
@@ -2272,7 +2525,10 @@ function wireEvents() {
   });
 
   if (els.symbol) {
-    els.symbol.addEventListener("input", handleSymbolInput);
+    els.symbol.addEventListener("input", () => {
+      setSymbolInvalid(false);
+      handleSymbolInput();
+    });
     els.symbol.addEventListener("focus", () => {
       const value = els.symbol.value.trim();
       if (value) updateSuggestions(value);
@@ -2417,6 +2673,10 @@ function wireEvents() {
     els.resetZoom.addEventListener("click", resetZoom);
   }
 
+  if (els.resetBtn) {
+    els.resetBtn.addEventListener("click", resetSearch);
+  }
+
   window.addEventListener("themechange", updateChartTheme);
 }
 
@@ -2429,6 +2689,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  restoreFromUrl();
+  const restored = restoreFromUrl();
   wireEvents();
+  autorunSelection(restored);
 });

@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stock Analyser — real OHLCV data, technical indicators and explainable statistical anomaly detection for NSE/BSE stocks.">
-  <title>Stock Analyser — Clean Data Flow</title>
+  <meta name="description" content="Stock Analysis — real OHLCV history, professional charts, technical indicators and explainable statistical anomaly checks for NSE and BSE symbols.">
+  <meta name="theme-color" content="#05070f">
+  <title>Stock Analysis — Clean Data Flow</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261022h">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20261023c">
   <script>
     try {
       if (localStorage.getItem("clean-data-theme") === "light") {
@@ -18,105 +19,117 @@
   </script>
 </head>
 <body class="analysis-page">
-  <div class="background-layer" aria-hidden="true"></div>
+  <div class="background-layer" aria-hidden="true">
+    <canvas id="ambientCanvas" class="ambient-canvas"></canvas>
+  </div>
 
-  <nav aria-label="Primary navigation">
+  <nav class="site-nav" aria-label="Primary navigation">
     <div class="brand-container">
       <a href="index.html" class="logo" aria-label="CLEANDATAFLOW — Clean Data Flow home">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <circle cx="8.5" cy="8.5" r="2.5"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+            <path d="M15.5 5H21v5.5"></path>
+          </svg>
+        </span>
         <span class="brand-text">CLEANDATAFLOW</span>
       </a>
     </div>
 
-    <ul class="nav-links">
-      <li><a href="index.html">HOME</a></li>
-      <li><a href="stocks.html">STOCKS</a></li>
-      <li class="active"><a href="stock-analysis.html" class="active" aria-current="page">STOCK ANALYSER</a></li>
-      <li><a href="wishlist.html">WISHLIST</a></li>
+    <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="primaryNav" aria-label="Open navigation menu">
+      <span></span><span></span><span></span>
+    </button>
+
+    <ul class="nav-links" id="primaryNav">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="stocks.html">Stocks</a></li>
+      <li class="active"><a href="stock-analysis.html" class="active" aria-current="page">Stock Analysis</a></li>
+      <li><a href="wishlist.html">Wishlist</a></li>
     </ul>
 
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
-      <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
-      </svg>
-      <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
-        <circle cx="12" cy="12" r="4"></circle>
-        <line x1="12" y1="2" x2="12" y2="4"></line>
-        <line x1="12" y1="20" x2="12" y2="22"></line>
-        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
-        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
-        <line x1="2" y1="12" x2="4" y2="12"></line>
-        <line x1="20" y1="12" x2="22" y2="12"></line>
-        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
-        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
-      </svg>
-    </button>
+    <div class="nav-actions">
+      <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
+        <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
+        </svg>
+        <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+          <circle cx="12" cy="12" r="4"></circle>
+          <line x1="12" y1="2" x2="12" y2="4"></line>
+          <line x1="12" y1="20" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+          <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="4" y2="12"></line>
+          <line x1="20" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+          <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+        </svg>
+      </button>
+    </div>
   </nav>
 
-  <main>
+  <main class="analysis-main">
     <header class="analysis-header page-header">
-      <h1>Stock Analyser</h1>
-      <p>
-        Search a stock, then run the analysis. Historical OHLCV comes from Yahoo Finance via the
-        backend; every indicator and anomaly score below is computed only from the bars actually
-        returned — nothing is simulated or filled in.
+      <span class="eyebrow">Analysis workspace</span>
+      <h1>Stock Analysis</h1>
+      <p class="analysis-lede">
+        Search an NSE or BSE stock to inspect its recent price and volume history.
+        Choose an exchange, period and interval, then run the analysis.
+        Indicators and anomaly checks use only the bars the provider returns — source and
+        freshness are shown with every result. This is historical data, not a live tick feed
+        or investment advice.
       </p>
     </header>
 
-    <!-- Search stage: the only visible controls are the symbol input and the button. -->
+    <!-- Search stage: exchange, period and interval are visible up front. -->
     <section id="searchStage" class="analysis-panel search-stage" aria-labelledby="searchHeading">
-      <h2 id="searchHeading" class="section-heading">Analyse a stock</h2>
-      <p class="section-note">
-        Type a company name or NSE symbol (for example RELIANCE, TCS or INFY), choose a
-        suggestion, then click <strong>Stock Analysis</strong>.
-      </p>
+      <div class="search-head">
+        <div>
+          <span class="eyebrow">New analysis</span>
+          <h2 id="searchHeading" class="section-heading">Analyse a stock</h2>
+          <p class="section-note">
+            Start typing a company name or symbol, then confirm the exchange and window.
+          </p>
+        </div>
+        <span class="search-badge">Real data only</span>
+      </div>
 
-      <form id="analysisForm" class="search-controls" novalidate>
-        <div class="symbol-field-wrap">
-          <div class="field field-symbol">
-            <label for="symbolInput">Stock name or symbol</label>
-            <input
-              id="symbolInput"
-              name="symbol"
-              type="text"
-              placeholder="Type a stock name or symbol…"
-              maxlength="30"
-              autocomplete="off"
-              autocapitalize="characters"
-              spellcheck="false"
-              role="combobox"
-              aria-autocomplete="list"
-              aria-expanded="false"
-              aria-controls="symbolSuggestionsPanel"
-              required
-            >
-            <small>Autocomplete uses the real NSE NIFTY 50 constituent list. You can also type an exact symbol.</small>
+      <form id="analysisForm" class="search-controls premium-search" novalidate>
+        <div class="search-fields">
+          <div class="symbol-field-wrap">
+            <div class="field field-symbol">
+              <label for="symbolInput">Stock name or symbol</label>
+              <input
+                id="symbolInput"
+                name="symbol"
+                type="text"
+                placeholder="RELIANCE, TCS, INFY…"
+                maxlength="30"
+                autocomplete="off"
+                autocapitalize="characters"
+                spellcheck="false"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded="false"
+                aria-controls="symbolSuggestionsPanel"
+                aria-describedby="symbolHelp"
+                required
+              >
+              <small id="symbolHelp">Autocomplete uses the NIFTY 50 constituent list plus local name aliases for well-known symbols. An exact symbol can also be typed.</small>
+            </div>
+            <div id="symbolSuggestionsPanel" role="listbox" aria-label="Matching stocks"></div>
           </div>
-          <div id="symbolSuggestionsPanel" role="listbox" aria-label="Matching stocks"></div>
-        </div>
 
-        <div class="field field-submit">
-          <button type="submit" id="analyzeBtn">Stock Analysis</button>
-          <small>Default timeframe: 3 months, daily bars, NSE.</small>
-        </div>
-
-        <!-- Functional but intentionally hidden on the initial screen. Deep links
-             and the analysis pipeline still use these values. -->
-        <div class="advanced-fields" aria-hidden="true">
           <div class="field field-exchange">
-            <label for="exchangeSelect">Exchange</label>
-            <select id="exchangeSelect" name="exchange" tabindex="-1">
+            <label for="exchangeSelect" data-tooltip="NSE is served by the NSE India integration. BSE symbol suffixes are requested through the history provider.">Exchange</label>
+            <select id="exchangeSelect" name="exchange">
               <option value="NSE" selected>NSE</option>
               <option value="BSE">BSE</option>
             </select>
           </div>
+
           <div class="field field-period">
-            <label for="periodSelect">Period</label>
-            <select id="periodSelect" name="period" tabindex="-1">
+            <label for="periodSelect" data-tooltip="How much history to request. Only provider-supported combinations are accepted.">Period</label>
+            <select id="periodSelect" name="period">
               <optgroup label="Days">
                 <option value="1d">1 day</option>
                 <option value="5d">5 days</option>
@@ -138,9 +151,10 @@
               </optgroup>
             </select>
           </div>
+
           <div class="field field-interval">
-            <label for="intervalSelect">Interval</label>
-            <select id="intervalSelect" name="interval" tabindex="-1">
+            <label for="intervalSelect" data-tooltip="Bar size. Intraday intervals have shorter provider limits and are not live ticks.">Interval</label>
+            <select id="intervalSelect" name="interval">
               <optgroup label="Minutes">
                 <option value="1m">1 minute</option>
                 <option value="2m">2 minutes</option>
@@ -163,20 +177,128 @@
             </select>
           </div>
         </div>
+
+        <div class="search-actions">
+          <button type="submit" id="analyzeBtn" class="btn-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <span id="analyzeBtnLabel">Analyse Stock</span>
+          </button>
+          <button type="button" id="resetBtn" class="btn-secondary">Reset</button>
+        </div>
       </form>
 
       <p id="selectionNote" class="selection-note hidden" role="status" aria-live="polite"></p>
       <div id="analysisStatus" class="analysis-status hidden" role="status" aria-live="polite"></div>
     </section>
 
+    <!-- Purposeful empty state: no invented prices, scores or results. -->
+    <section id="preAnalysis" class="pre-analysis" aria-labelledby="preAnalysisTitle">
+      <div class="pre-visual" aria-hidden="true">
+        <span class="pre-orbit orbit-one"></span>
+        <span class="pre-orbit orbit-two"></span>
+        <svg viewBox="0 0 420 240" role="presentation">
+          <defs>
+            <linearGradient id="preCandleUp" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#67e8f9" stop-opacity="0.95"></stop>
+              <stop offset="1" stop-color="#38bdf8" stop-opacity="0.30"></stop>
+            </linearGradient>
+            <linearGradient id="preCandleDown" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#a78bfa" stop-opacity="0.90"></stop>
+              <stop offset="1" stop-color="#8b5cf6" stop-opacity="0.25"></stop>
+            </linearGradient>
+            <linearGradient id="preLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#22d3ee" stop-opacity="0.20"></stop>
+              <stop offset="0.55" stop-color="#38bdf8" stop-opacity="0.85"></stop>
+              <stop offset="1" stop-color="#a78bfa" stop-opacity="0.35"></stop>
+            </linearGradient>
+          </defs>
+          <g opacity="0.24" stroke="#94a3b8" stroke-width="1">
+            <line x1="46" y1="48" x2="386" y2="48"></line>
+            <line x1="46" y1="100" x2="386" y2="100"></line>
+            <line x1="46" y1="152" x2="386" y2="152"></line>
+            <line x1="46" y1="204" x2="386" y2="204"></line>
+          </g>
+          <path d="M48 176 C90 168 104 130 140 140 C176 150 190 106 224 112 C258 118 276 74 312 84 C342 92 358 66 384 58"
+                fill="none" stroke="url(#preLine)" stroke-width="2.5" stroke-linecap="round"></path>
+          <g stroke-width="1.5">
+            <g><line x1="92" y1="132" x2="92" y2="196" stroke="#38bdf8" opacity="0.7"></line><rect x="84" y="146" width="16" height="34" rx="3" fill="url(#preCandleUp)"></rect></g>
+            <g><line x1="140" y1="118" x2="140" y2="186" stroke="#38bdf8" opacity="0.7"></line><rect x="132" y="132" width="16" height="38" rx="3" fill="url(#preCandleUp)"></rect></g>
+            <g><line x1="188" y1="96" x2="188" y2="166" stroke="#a78bfa" opacity="0.7"></line><rect x="180" y="110" width="16" height="36" rx="3" fill="url(#preCandleDown)"></rect></g>
+            <g><line x1="236" y1="82" x2="236" y2="154" stroke="#38bdf8" opacity="0.7"></line><rect x="228" y="96" width="16" height="40" rx="3" fill="url(#preCandleUp)"></rect></g>
+            <g><line x1="284" y1="62" x2="284" y2="136" stroke="#a78bfa" opacity="0.7"></line><rect x="276" y="78" width="16" height="36" rx="3" fill="url(#preCandleDown)"></rect></g>
+            <g><line x1="332" y1="52" x2="332" y2="120" stroke="#38bdf8" opacity="0.7"></line><rect x="324" y="64" width="16" height="38" rx="3" fill="url(#preCandleUp)"></rect></g>
+          </g>
+          <g fill="#38bdf8" opacity="0.55">
+            <rect x="84" y="208" width="16" height="12" rx="2"></rect>
+            <rect x="132" y="200" width="16" height="20" rx="2"></rect>
+            <rect x="180" y="204" width="16" height="16" rx="2"></rect>
+            <rect x="228" y="196" width="16" height="24" rx="2"></rect>
+            <rect x="276" y="202" width="16" height="18" rx="2"></rect>
+            <rect x="324" y="194" width="16" height="26" rx="2"></rect>
+          </g>
+          <circle cx="312" cy="84" r="4.5" fill="#f87171" opacity="0.9"></circle>
+          <circle cx="312" cy="84" r="9" fill="none" stroke="#f87171" stroke-width="1" opacity="0.45"></circle>
+        </svg>
+      </div>
+      <div class="pre-copy">
+        <span class="eyebrow">Ready when you are</span>
+        <h2 id="preAnalysisTitle">Start with a symbol</h2>
+        <p>
+          Enter a company or ticker above, choose the exchange, period and interval, then select
+          <strong>Analyse Stock</strong>. The decorative chart on the left contains no prices and
+          is only a placeholder for the real response.
+        </p>
+        <ul class="pre-tags" aria-label="Analysis capabilities">
+          <li>Real OHLCV</li>
+          <li>Indicators</li>
+          <li>Anomaly flags</li>
+          <li>Source &amp; freshness</li>
+        </ul>
+        <p class="pre-note">No results, prices or scores are shown until real data returns.</p>
+      </div>
+    </section>
+
     <!-- Dashboard stage: revealed only after a successful analysis response. -->
     <div id="dashboardStage" class="dashboard-stage hidden">
+      <section id="resultSummary" class="result-summary" aria-labelledby="resultTitle">
+        <div class="rs-identity">
+          <span class="eyebrow">Analysis result</span>
+          <h2 id="resultTitle">—</h2>
+          <p id="resultSub">Symbol, exchange and provider will appear here.</p>
+        </div>
+        <div class="rs-stat">
+          <span>Latest close</span>
+          <strong id="resultLast">—</strong>
+          <small id="resultLastDate">—</small>
+        </div>
+        <div class="rs-stat">
+          <span>Change vs previous bar</span>
+          <strong id="resultChange">—</strong>
+          <small>From returned bars</small>
+        </div>
+        <div class="rs-stat">
+          <span>Window</span>
+          <strong id="resultWindow">—</strong>
+          <small>Requested period · interval</small>
+        </div>
+        <div class="rs-stat rs-source">
+          <span>Source</span>
+          <strong id="resultSource">—</strong>
+          <small id="resultFetched">Fetched time unavailable</small>
+          <span id="resultFreshness" class="freshness-pill">Historical data · not live</span>
+        </div>
+      </section>
+
       <section id="timeframePanel" class="timeframe-panel" aria-labelledby="timeframeHeading">
         <div class="timeframe-copy">
           <span class="eyebrow">Historical window</span>
           <h2 id="timeframeHeading">Timeframe</h2>
           <p id="timeframeHint">
-            Choose a window to reload the same stock. Only provider-supported windows are shown.
+            Reload the same stock with a different supported window. The current chart stays
+            visible until the new response arrives.
           </p>
         </div>
         <div id="timeframeControls" class="timeframe-controls" role="group" aria-label="Historical timeframe"></div>
@@ -185,15 +307,23 @@
 
       <section id="metaPanel" class="analysis-panel" aria-labelledby="metaHeading">
         <div class="panel-heading">
-          <h2 id="metaHeading">Data source</h2>
+          <div>
+            <span class="eyebrow">Provenance</span>
+            <h2 id="metaHeading">Data source &amp; quality</h2>
+          </div>
           <span id="metaBadge" class="meta-badge"></span>
         </div>
         <dl id="metaList" class="meta-list"></dl>
+        <p class="panel-footnote">
+          Provider and fetch details come from the backend response. A missing value is shown
+          as unavailable, never filled in.
+        </p>
       </section>
 
       <section id="chartPanel" class="analysis-panel" aria-labelledby="chartHeading">
         <div class="panel-heading chart-head">
           <div>
+            <span class="eyebrow">Price history</span>
             <h2 id="chartHeading">Price &amp; volume</h2>
             <p class="panel-subtitle">
               Actual returned OHLC bars. Scroll to zoom, drag to pan, and hover for OHLCV details.
@@ -231,6 +361,17 @@
 
         <p id="chartNote" class="chart-note"></p>
         <div id="anomalyLegend" class="anomaly-legend hidden" aria-live="polite"></div>
+
+        <details class="info-details">
+          <summary>Chart symbols &amp; data-quality notes</summary>
+          <p>
+            Red circles mark candles for which a supported detector returned an anomaly. Dashed
+            blue and teal lines are the latest SMA and EMA values, not historical series. Dotted
+            grey lines are Fibonacci levels derived from the returned range. Omitted bars are
+            listed above instead of being interpolated.
+          </p>
+        </details>
+
         <p class="chart-attribution">
           Charting: TradingView Lightweight Charts v4.2.3 (Apache-2.0), vendored locally in
           <code>vendor/</code>.
@@ -238,40 +379,89 @@
       </section>
 
       <section id="indicatorPanel" aria-labelledby="indicatorHeading">
-        <h2 id="indicatorHeading" class="section-heading">Indicator overlays &amp; derived indicators</h2>
+        <div class="section-title-row section-head">
+          <div>
+            <span class="eyebrow">Computed observations</span>
+            <h2 id="indicatorHeading" class="section-heading">Trend, momentum &amp; price structure</h2>
+          </div>
+          <span class="section-chip">Server-computed</span>
+        </div>
         <p class="section-note">
-          SMA, EMA and Fibonacci price lines are shown only when the backend returns a usable
-          value. Those lines are latest values, not historical series.
+          SMA, EMA and Fibonacci lines appear only when the backend returns a usable value.
+          Volume and volatility checks sit alongside the trend indicators because they describe
+          a different part of the market's behaviour.
         </p>
-        <div id="indicatorGrid" class="analysis-grid"></div>
+        <details class="info-details">
+          <summary>How to read these cards</summary>
+          <p>
+            “Available” means the backend returned a usable value for the selected window.
+            "Unavailable" is deliberate: it usually means there were not enough bars with usable OHLCV,
+            and no value has been substituted. Method notes describe the calculation without
+            promising a trading outcome.
+          </p>
+        </details>
+        <div id="indicatorGrid" class="analysis-groups"></div>
       </section>
 
       <section id="anomalyPanel" aria-labelledby="anomalyHeading">
-        <h2 id="anomalyHeading" class="section-heading">Statistical anomaly detections</h2>
+        <div class="section-title-row section-head">
+          <div>
+            <span class="eyebrow">AI-assisted checks</span>
+            <h2 id="anomalyHeading" class="section-heading">Potential anomalies</h2>
+          </div>
+          <span class="section-chip">Not proof of manipulation</span>
+        </div>
         <p class="section-note">
           Red circles mark only candles for which a supported detector returned an anomaly.
-          LOF, volume spike, volatility anomaly and volume–price divergence are evaluated
-          causally on historical bars. Autoencoder and Transformer remain latest-complete-bar
-          checks and are never drawn as historical markers. Divergence is a signal without a
-          numeric threshold; no score is invented for it. A flagged observation is not proof of
+          Historical markers are clustered per candle; latest-only detectors are labelled and
+          are not drawn back through history. A flag is an unusual observation, not proof of
           manipulation and not a trading signal.
         </p>
-        <div id="anomalyGrid" class="analysis-grid"></div>
+        <div id="anomalyGrid" class="analysis-groups"></div>
       </section>
 
       <p class="disclaimer">
         These indicators describe past price and volume behaviour. They are not predictions and
         not investment advice. Unavailable values are shown as “Unavailable”, never as made-up
-        numbers. Statistical anomaly detectors can flag unusual observations without any market
-        manipulation occurring.
+        numbers. A statistical anomaly is not proof of manipulation; detectors can flag unusual
+        observations without any manipulation occurring.
       </p>
     </div>
   </main>
 
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a href="index.html" class="logo" aria-label="Clean Data Flow home">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+              <path d="M15.5 5H21v5.5"></path>
+            </svg>
+          </span>
+          <span class="brand-text">CLEANDATAFLOW</span>
+        </a>
+        <p>See beyond the price. Understand the pattern.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer navigation">
+        <a href="index.html#about">About</a>
+        <a href="index.html#features">Features</a>
+        <a href="stocks.html">Stocks</a>
+        <a href="index.html#data-sources">Data Sources</a>
+        <a href="index.html#contact">Contact</a>
+        <a href="index.html#disclaimer">Disclaimer</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Clean Data Flow · Educational project</span>
+      <span>Real data only · No fabricated fallbacks</span>
+    </div>
+  </footer>
+
   <script src="config.js"></script>
-  <script src="script.js?v=20261022h"></script>
+  <script src="script.js?v=20261023c"></script>
   <script src="vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="chart-utils.js?v=20261022h"></script>
-  <script src="analysis.js?v=20261022h"></script>
+  <script src="chart-utils.js?v=20261023c"></script>
+  <script src="analysis.js?v=20261023c"></script>
 </body>
 </html>

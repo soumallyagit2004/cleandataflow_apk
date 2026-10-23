@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stock Explorer — browse NSE India indices and their constituent stocks with real session data.">
-  <title>Stock Explorer — Clean Data Flow</title>
+  <meta name="description" content="Explore NSE indices and constituent stocks with real session data, search, sorting and direct links into Clean Data Flow analysis.">
+  <meta name="theme-color" content="#05070f">
+  <title>Explore the Market — Clean Data Flow</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261022h">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20261023c">
   <script>
     try {
       if (localStorage.getItem("clean-data-theme") === "light") {
@@ -17,54 +18,69 @@
     } catch (error) {}
   </script>
 </head>
-<body>
-  <div class="background-layer" aria-hidden="true"></div>
+<body class="stocks-page">
+  <div class="background-layer" aria-hidden="true">
+    <canvas id="ambientCanvas" class="ambient-canvas"></canvas>
+  </div>
 
-  <nav aria-label="Primary navigation">
+  <nav class="site-nav" aria-label="Primary navigation">
     <div class="brand-container">
       <a href="index.html" class="logo" aria-label="CLEANDATAFLOW — Clean Data Flow home">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <circle cx="8.5" cy="8.5" r="2.5"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+            <path d="M15.5 5H21v5.5"></path>
+          </svg>
+        </span>
         <span class="brand-text">CLEANDATAFLOW</span>
       </a>
     </div>
 
-    <ul class="nav-links">
-      <li><a href="index.html">HOME</a></li>
-      <li class="active"><a href="stocks.html" class="active" aria-current="page">STOCKS</a></li>
-      <li><a href="stock-analysis.html">STOCK ANALYSER</a></li>
-      <li><a href="wishlist.html">WISHLIST</a></li>
+    <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="primaryNav" aria-label="Open navigation menu">
+      <span></span><span></span><span></span>
+    </button>
+
+    <ul class="nav-links" id="primaryNav">
+      <li><a href="index.html">Home</a></li>
+      <li class="active"><a href="stocks.html" class="active" aria-current="page">Stocks</a></li>
+      <li><a href="stock-analysis.html">Stock Analysis</a></li>
+      <li><a href="wishlist.html">Wishlist</a></li>
     </ul>
 
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
-      <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
-      </svg>
-      <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
-        <circle cx="12" cy="12" r="4"></circle>
-        <line x1="12" y1="2" x2="12" y2="4"></line>
-        <line x1="12" y1="20" x2="12" y2="22"></line>
-        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
-        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
-        <line x1="2" y1="12" x2="4" y2="12"></line>
-        <line x1="20" y1="12" x2="22" y2="12"></line>
-        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
-        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
-      </svg>
-    </button>
+    <div class="nav-actions">
+      <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
+        <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
+        </svg>
+        <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+          <circle cx="12" cy="12" r="4"></circle>
+          <line x1="12" y1="2" x2="12" y2="4"></line>
+          <line x1="12" y1="20" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+          <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="4" y2="12"></line>
+          <line x1="20" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+          <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+        </svg>
+      </button>
+    </div>
   </nav>
 
-  <main>
-    <header class="page-header">
-      <h1>Stock Explorer</h1>
+  <main class="stocks-main">
+    <header class="page-header stocks-hero">
+      <span class="eyebrow">Market explorer</span>
+      <h1>Explore the Market</h1>
       <p>
-        Browse the NSE India indices, filter them by name or symbol, and open any index to see
-        its constituent stocks. Selecting a stock opens the Stock Analyser with that symbol
-        pre-filled.
+        Start broad, then go deep. Open an NSE index to browse its constituent stocks, filter by
+        symbol or name, compare the latest session values, and send any stock into the analysis
+        workspace with its symbol and exchange already selected.
       </p>
+      <div class="page-meta-row">
+        <span class="meta-chip"><span class="live-dot" aria-hidden="true"></span>NSE latest session</span>
+        <span class="meta-chip">Not a live tick feed</span>
+        <span class="meta-chip">NSE indices only</span>
+      </div>
     </header>
 
     <div class="data-banner" role="status">
@@ -74,9 +90,10 @@
         <line x1="12" y1="8" x2="12.01" y2="8"></line>
       </svg>
       <span>
-        <strong>Data source:</strong> NSE India latest-session data, served by the local FastAPI
-        backend. Not guaranteed live or tick-by-tick. Sensex is a BSE index and is not available
-        from this NSE endpoint.
+        <strong>Data source:</strong> NSE India latest-session data, served by the FastAPI backend.
+        Values may be delayed and are not tick-by-tick. Sensex is a BSE index and is not available
+        from this NSE endpoint, so it is not fabricated here. Company names are local display
+        aliases for well-known symbols; NSE itself supplies identifiers, not full company names.
       </span>
     </div>
 
@@ -93,39 +110,110 @@
       <button type="button" class="retry-btn" id="retryIndices" style="display:none">Retry</button>
     </div>
 
-    <div id="loading" class="loading" aria-live="polite" aria-busy="true">Loading NSE indices…</div>
-
-    <div id="indicesToolbar" class="stocks-toolbar hidden">
-      <div class="stocks-toolbar-field">
-        <label for="indexFilter">Filter indices</label>
-        <input id="indexFilter" type="search" placeholder="Search by name or symbol…" autocomplete="off" spellcheck="false">
+    <section class="market-board" aria-labelledby="indicesTitle">
+      <div class="section-title-row section-head">
+        <div>
+          <span class="eyebrow">Index board</span>
+          <h2 id="indicesTitle">Indices</h2>
+        </div>
+        <div class="index-board-actions">
+          <span id="indicesCount" class="text-muted small" aria-live="polite"></span>
+          <button type="button" id="indicesToggle" class="btn-secondary btn-small hidden" aria-controls="indices-container" aria-expanded="false">Show all indices</button>
+        </div>
       </div>
-      <div class="stocks-toolbar-field stocks-toolbar-sort">
-        <label for="indexSort">Sort</label>
-        <select id="indexSort">
-          <option value="default">Provider order</option>
-          <option value="gainers">Gainers first</option>
-          <option value="losers">Losers first</option>
-          <option value="name">Name (A–Z)</option>
-        </select>
-      </div>
-      <span id="indicesCount" class="text-muted small" aria-live="polite"></span>
-    </div>
 
-    <div id="indices-container" class="indices-grid hidden" role="list" aria-label="NSE indices"></div>
+      <div id="indicesToolbar" class="stocks-toolbar hidden">
+        <div class="stocks-toolbar-field">
+          <label for="indexFilter">Filter indices</label>
+          <input id="indexFilter" type="search" placeholder="Search by name or symbol…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="stocks-toolbar-field stocks-toolbar-sort">
+          <label for="indexSort">Sort</label>
+          <select id="indexSort">
+            <option value="default">Provider order</option>
+            <option value="gainers">Gainers first</option>
+            <option value="losers">Losers first</option>
+            <option value="name">Name (A–Z)</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="loading" class="loading" aria-live="polite" aria-busy="true">Loading NSE indices…</div>
+
+      <div id="indices-container" class="indices-grid hidden" role="list" aria-label="NSE indices"></div>
+    </section>
 
     <section id="stock-detail" class="stock-detail hidden" aria-live="polite" aria-labelledby="detailTitle">
       <div class="detail-header">
-        <button type="button" id="backBtn" class="back-btn">&larr; Back to indices</button>
-        <h2 id="detailTitle"></h2>
+        <button type="button" id="backBtn" class="back-btn">← All indices</button>
+        <div class="detail-title-wrap">
+          <span class="eyebrow">Index constituents</span>
+          <h2 id="detailTitle"></h2>
+          <p id="detailMeta" class="detail-meta"></p>
+        </div>
+        <span id="detailCount" class="detail-count"></span>
       </div>
-      <p id="detailMeta" class="detail-meta"></p>
-      <p id="detailCount" class="detail-count"></p>
-      <ul id="stocksList" class="stocks-list" role="list"></ul>
+
+      <div class="stock-tools">
+        <div class="stocks-toolbar-field stock-search-field">
+          <label for="stockFilter">Find a stock</label>
+          <input id="stockFilter" type="search" placeholder="Symbol, NSE identifier or known company name…" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="stocks-toolbar-field stocks-toolbar-sort">
+          <label for="stockSort">Sort stocks</label>
+          <select id="stockSort">
+            <option value="default">Provider order</option>
+            <option value="gainers">Gainers first</option>
+            <option value="losers">Losers first</option>
+            <option value="price">Last value (high → low)</option>
+            <option value="name">Symbol (A–Z)</option>
+          </select>
+        </div>
+        <span id="stockShown" class="text-muted small" aria-live="polite"></span>
+        <span class="exchange-pill" title="This NSE endpoint returns NSE constituent symbols only. BSE listings are not provided.">NSE listings</span>
+      </div>
+
+      <div class="stocks-table-head" aria-hidden="true">
+        <span>Symbol</span>
+        <span>Company / series</span>
+        <span>Last</span>
+        <span>Change</span>
+        <span>Open</span>
+      </div>
+      <ul id="stocksList" class="stocks-list" role="list" aria-label="Constituent stocks"></ul>
     </section>
   </main>
 
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a href="index.html" class="logo" aria-label="Clean Data Flow home">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+              <path d="M15.5 5H21v5.5"></path>
+            </svg>
+          </span>
+          <span class="brand-text">CLEANDATAFLOW</span>
+        </a>
+        <p>See beyond the price. Understand the pattern.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer navigation">
+        <a href="index.html#about">About</a>
+        <a href="index.html#features">Features</a>
+        <a href="stocks.html">Stocks</a>
+        <a href="index.html#data-sources">Data Sources</a>
+        <a href="index.html#contact">Contact</a>
+        <a href="index.html#disclaimer">Disclaimer</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Clean Data Flow · Educational project</span>
+      <span>Real data only · No fabricated fallbacks</span>
+    </div>
+  </footer>
+
   <script src="config.js"></script>
-  <script src="script.js?v=20261022h"></script>
+  <script src="script.js?v=20261023c"></script>
 </body>
 </html>

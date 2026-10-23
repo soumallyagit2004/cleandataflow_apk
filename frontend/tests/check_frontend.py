@@ -15,6 +15,7 @@ class PageParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.ids = set()
+        self.attributes = {}
         self.scripts = []
         self.stylesheets = []
         self.links = []
@@ -23,6 +24,7 @@ class PageParser(HTMLParser):
         values = dict(attrs)
         if values.get("id"):
             self.ids.add(values["id"])
+            self.attributes[values["id"]] = values
         if tag == "script" and values.get("src"):
             self.scripts.append(values["src"])
         if tag == "link" and values.get("rel") == "stylesheet":
@@ -172,10 +174,17 @@ def main() -> int:
     assert "AbortController" in utils
     assert "isCurrent" in utils
 
-    # The initial page hides exchange/period/interval controls; the historical
-    # timeframe selector lives inside the results stage and only renders after a
-    # successful explicit analysis.
-    assert 'class="advanced-fields" aria-hidden="true"' in html
+    # Exchange/period/interval are deliberately visible in the redesign. They
+    # must remain real, keyboard-reachable form controls rather than a hidden
+    # compatibility block. The historical timeframe selector still lives inside
+    # the results stage and only renders after a successful explicit analysis.
+    assert 'class="search-fields"' in html
+    assert "advanced-fields" not in html
+    for field_id in ("exchangeSelect", "periodSelect", "intervalSelect"):
+        attrs = parser.attributes.get(field_id, {})
+        assert field_id in parser.ids, f"missing control: {field_id}"
+        assert attrs.get("tabindex") != "-1", f"{field_id} must be keyboard reachable"
+        assert "hidden" not in attrs, f"{field_id} must be visible"
     assert 'id="dashboardStage" class="dashboard-stage hidden"' in html
     assert html.index('id="timeframePanel"') > html.index('id="dashboardStage"')
     assert html.index('id="timeframePanel"') < html.index('id="metaPanel"')

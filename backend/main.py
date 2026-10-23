@@ -1,11 +1,17 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 import os
+import re
 import urllib.request
 import urllib.error
 import json
 import time
+import uuid
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote
 from typing import Dict, Any, Tuple
 from market_data import (
@@ -13,6 +19,7 @@ from market_data import (
     validate_period_interval,
     MarketDataUnavailable,
 )
+from news_data import fetch_market_news, NewsUnavailable
 from oi_data import fetch_open_interest
 from analysis import (
     analyze_bars,
@@ -48,7 +55,7 @@ app.add_middleware(
     CORSMiddleware,
     # This app exposes public read-only GET data; credentials are never needed.
     allow_origins=_parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS")),
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -355,4 +362,111 @@ def get_index_constituents(index_name: str):
         "marketStatus": data.get("marketStatus", {}),
         "timestamp": data.get("timestamp"),
         "source": "NSE India (latest session data, not guaranteed live or tick-by-tick)"
+    }
+
+
+# ==========================================================================
+# Market news
+# ==========================================================================
+
+
+@app.get("/api/news")
+def get_market_news(limit: int = 6):
+    """Return recent real market headlines from a public RSS publisher feed.
+
+    Headlines, links, publishers and publication times are passed through from
+    the feed. ``fetchedAt`` is when this backend retrieved the feed. If the feed
+    is unavailable the route fails instead of returning invented news.
+    """
+
+    try:
+        return fetch_market_news(limit=limit)
+    except NewsUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Market news is temporarily unavailable: {exc} "
+                "No headlines were invented."
+            ),
+        )
+
+
+# ==========================================================================
+# Feedback
+# ==========================================================================
+
+FEEDBACK_FILE = Path(
+    os.environ.get(
+        "FEEDBACK_FILE",
+        Path(__file__).resolve().parent / "data" / "feedback.jsonl",
+    )
+)
+_feedback_lock = threading.Lock()
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class FeedbackPayload(BaseModel):
+    name: str = Field(default="", max_length=80)
+    email: str = Field(default="", max_length=120)
+    rating: int = Field(ge=1, le=5)
+    message: str = Field(min_length=10, max_length=2000)
+    page: str = Field(default="home", max_length=40)
+
+
+@app.post("/api/feedback")
+def submit_feedback(payload: FeedbackPayload):
+    """Store validated feedback in a JSONL file on this backend instance.
+
+    This is a genuine submission endpoint, not an email service. On free hosts
+    with ephemeral filesystems the file may not survive a redeploy; the response
+    says so instead of implying permanent storage or an email delivery.
+    """
+
+    name = payload.name.strip()
+    email = payload.email.strip()
+    message = payload.message.strip()
+    page = payload.page.strip() or "home"
+    if not message:
+        raise HTTPException(status_code=422, detail="Feedback message cannot be empty.")
+    if email and not _EMAIL_RE.match(email):
+        raise HTTPException(
+            status_code=422,
+            detail="If an email is provided, it must look like name@example.com.",
+        )
+
+    received_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    entry = {
+        "id": uuid.uuid4().hex,
+        "receivedAt": received_at,
+        "name": name,
+        "email": email,
+        "rating": payload.rating,
+        "message": message,
+        "page": page,
+    }
+
+    try:
+        FEEDBACK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _feedback_lock:
+            with FEEDBACK_FILE.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Feedback could not be stored on this backend instance. "
+                "Nothing was submitted; please try again later."
+            ),
+        ) from exc
+
+    return {
+        "status": "success",
+        "message": "Feedback stored on the backend instance.",
+        "id": entry["id"],
+        "storedAt": received_at,
+        "persistence": (
+            "Saved as a local JSONL file by this FastAPI backend. Hosted "
+            "filesystems may be ephemeral and reset on redeploy; this is not an "
+            "email subscription or a ticketing system."
+        ),
     }

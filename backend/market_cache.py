@@ -120,8 +120,13 @@ def is_session_open(now_ist: datetime | None = None) -> bool:
 
 
 def ttl_for_key(interval: str, now_ist: datetime | None = None) -> float:
-    """Cache lifetime for one request key given interval and market hours."""
-    if is_session_open(now_ist):
+    """Cache lifetime for one request key given interval and market hours.
+
+    ``now_ist`` is resolved once and reused so a closed session never leaves
+    the caller's ``None`` timestamp reaching ``_minutes_to_next_session``.
+    """
+    now = now_ist or _ist_now()
+    if is_session_open(now):
         ttl = (
             INSESSION_INTRADAY_TTL_SECONDS
             if interval in INTRADAY_INTERVALS
@@ -137,7 +142,7 @@ def ttl_for_key(interval: str, now_ist: datetime | None = None) -> float:
             else INSESSION_DAILY_TTL_SECONDS
         )
 
-    minutes_to_next = _minutes_to_next_session(now_ist)
+    minutes_to_next = _minutes_to_next_session(now)
     seconds_to_next = minutes_to_next * 60.0
     cap = (
         CLOSED_INTRADAY_CAP_SECONDS

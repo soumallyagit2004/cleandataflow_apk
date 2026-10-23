@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Clean Data Flow — data-driven NSE market overview, stock exploration and explainable technical analysis.">
-  <title>Clean Data Flow — Market Overview</title>
+  <meta name="description" content="Clean Data Flow — see beyond the price with real NSE market data, professional charts, technical indicators and explainable anomaly checks.">
+  <meta name="theme-color" content="#05070f">
+  <title>Clean Data Flow — See Beyond the Price</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261022h">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=20261023c">
   <script>
     /* Apply the saved appearance before first paint. Dark is the default. */
     try {
@@ -18,82 +19,153 @@
     } catch (error) {}
   </script>
 </head>
-<body>
-  <div class="background-layer" aria-hidden="true"></div>
+<body class="home-page">
+  <div class="background-layer" aria-hidden="true">
+    <canvas id="ambientCanvas" class="ambient-canvas"></canvas>
+  </div>
 
-  <nav aria-label="Primary navigation">
+  <nav class="site-nav" aria-label="Primary navigation">
     <div class="brand-container">
       <a href="index.html" class="logo" aria-label="CLEANDATAFLOW — Clean Data Flow home">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="7" height="7"></rect>
-          <circle cx="8.5" cy="8.5" r="2.5"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
+        <span class="logo-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+            <path d="M15.5 5H21v5.5"></path>
+          </svg>
+        </span>
         <span class="brand-text">CLEANDATAFLOW</span>
       </a>
     </div>
 
-    <ul class="nav-links">
-      <li class="active"><a href="index.html" class="active" aria-current="page">HOME</a></li>
-      <li><a href="stocks.html">STOCKS</a></li>
-      <li><a href="stock-analysis.html">STOCK ANALYSER</a></li>
-      <li><a href="wishlist.html">WISHLIST</a></li>
+    <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="primaryNav" aria-label="Open navigation menu">
+      <span></span><span></span><span></span>
+    </button>
+
+    <ul class="nav-links" id="primaryNav">
+      <li class="active"><a href="index.html" class="active" aria-current="page">Home</a></li>
+      <li><a href="stocks.html">Stocks</a></li>
+      <li><a href="stock-analysis.html">Stock Analysis</a></li>
+      <li><a href="wishlist.html">Wishlist</a></li>
     </ul>
 
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
-      <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
-      </svg>
-      <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
-        <circle cx="12" cy="12" r="4"></circle>
-        <line x1="12" y1="2" x2="12" y2="4"></line>
-        <line x1="12" y1="20" x2="12" y2="22"></line>
-        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
-        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
-        <line x1="2" y1="12" x2="4" y2="12"></line>
-        <line x1="20" y1="12" x2="22" y2="12"></line>
-        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
-        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
-      </svg>
-    </button>
+    <div class="nav-actions">
+      <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
+        <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
+        </svg>
+        <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+          <circle cx="12" cy="12" r="4"></circle>
+          <line x1="12" y1="2" x2="12" y2="4"></line>
+          <line x1="12" y1="20" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+          <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="4" y2="12"></line>
+          <line x1="20" y1="12" x2="22" y2="12"></line>
+          <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+          <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
+        </svg>
+      </button>
+    </div>
   </nav>
 
   <main class="homepage">
-    <section class="hero" aria-labelledby="heroTitle">
-      <span class="hero-eyebrow">Explainable market intelligence</span>
-      <h1 id="heroTitle">Market clarity, without the noise.</h1>
-      <p class="subtitle">
-        Real NSE index data, searchable constituents and explainable technical analysis.
-        Every number comes from a named source — unavailable values stay unavailable.
-      </p>
-      <a class="cta-primary" href="stock-analysis.html">
-        Open the Stock Analyser
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <line x1="5" y1="12" x2="19" y2="12"></line>
-          <polyline points="12 5 19 12 12 19"></polyline>
-        </svg>
-      </a>
-      <div class="hero-trust" aria-label="Data principles">
-        <span>Real returned data</span>
-        <span>Causal anomaly checks</span>
-        <span>No fabricated values</span>
+    <!-- Hero: real copy on the left, a real-data market snapshot on the right. -->
+    <section class="hero hero-split" aria-labelledby="heroTitle">
+      <div class="hero-copy">
+        <span class="hero-eyebrow"><span class="live-dot" aria-hidden="true"></span>AI-assisted market intelligence</span>
+        <h1 id="heroTitle"><span class="hero-title-line">CLEAN DATA</span><span class="hero-title-accent">FLOW</span></h1>
+        <p class="hero-tagline">See Beyond the Price. Understand the Pattern.</p>
+        <p class="subtitle">
+          A focused stock-analysis workspace for NSE and BSE symbols. Inspect real OHLCV history,
+          technical indicators and statistically flagged observations — with the source and
+          freshness of every result shown up front.
+        </p>
+        <div class="hero-actions">
+          <a class="cta-primary" href="stock-analysis.html">
+            Start Analysis
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </a>
+          <a class="cta-secondary" href="stocks.html">Explore Stocks</a>
+        </div>
+        <ul class="hero-trust" aria-label="Data principles">
+          <li>Real returned data</li>
+          <li>Explainable checks</li>
+          <li>No fabricated values</li>
+        </ul>
+      </div>
+
+      <div class="hero-visual" aria-labelledby="heroChartTitle">
+        <div class="hero-chart-shell">
+          <div class="hero-chart-head">
+            <div>
+              <span class="eyebrow">Market snapshot</span>
+              <h2 id="heroChartTitle">RELIANCE · NSE</h2>
+            </div>
+            <span class="source-pill" id="heroFreshness">Loading real data…</span>
+          </div>
+
+          <div class="hero-price-row">
+            <strong id="heroLast">—</strong>
+            <span id="heroChange" class="hero-change">—</span>
+          </div>
+          <p class="hero-price-note" id="heroPriceNote">Waiting for the backend to return real daily bars.</p>
+
+          <div id="heroChart" class="hero-chart" role="img" aria-label="Loading a real 3-month daily price and volume chart for RELIANCE on NSE">
+            <div class="hero-chart-loading" id="heroChartState">
+              <span class="spinner" aria-hidden="true"></span>
+              Loading a real market snapshot…
+            </div>
+          </div>
+
+          <div class="hero-chart-legend" aria-hidden="true">
+            <span><i class="legend-line price"></i>Price</span>
+            <span><i class="legend-bar volume"></i>Volume</span>
+            <span><i class="legend-dot anomaly"></i>Anomaly marker</span>
+          </div>
+
+          <div class="hero-chart-foot">
+            <span id="heroSource">Source will appear with the data</span>
+            <span id="heroFetched">Not loaded yet</span>
+          </div>
+        </div>
+
+        <div class="floating-panel fp-anomalies" aria-hidden="true">
+          <span class="fp-label">Historical flags</span>
+          <strong id="heroAnomalyCount">—</strong>
+          <span id="heroAnomalyNote">Waiting for data</span>
+        </div>
+
+        <div class="floating-panel fp-window" aria-hidden="true">
+          <span class="fp-label">Window</span>
+          <strong>3M · Daily</strong>
+          <span>Historical OHLCV</span>
+        </div>
+
+        <div class="visual-glow" aria-hidden="true"></div>
       </div>
     </section>
 
-    <section class="market-overview" aria-labelledby="overviewTitle">
-      <div class="section-title-row">
-        <h2 id="overviewTitle">NSE market overview</h2>
+    <!-- Live NSE index overview (real /api/indices data). -->
+    <section class="section market-overview" id="market" aria-labelledby="overviewTitle">
+      <div class="section-title-row section-head">
+        <div>
+          <span class="eyebrow">Live session board</span>
+          <h2 id="overviewTitle">NSE market overview</h2>
+        </div>
         <span class="text-muted small" id="indicesMeta">Loading session data…</span>
       </div>
 
-      <div class="data-banner" role="status">
+      <div class="data-banner data-banner-compact" role="status">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="12" cy="12" r="10"></circle>
           <line x1="12" y1="16" x2="12" y2="12"></line>
           <line x1="12" y1="8" x2="12.01" y2="8"></line>
         </svg>
         <span>
-          <strong>Source:</strong> NSE India latest-session data via the local FastAPI backend.
+          <strong>Source:</strong> NSE India latest-session data via the FastAPI backend.
           This is not a live tick feed. If the provider is unavailable, the page says so and
           never substitutes made-up prices.
         </span>
@@ -103,48 +175,323 @@
       <div id="overviewGrid" class="overview-grid" aria-live="polite">
         <div class="loading">Loading NSE indices…</div>
       </div>
+
+      <div class="breadth-shell">
+        <div class="breadth-head">
+          <div>
+            <span class="eyebrow">Breadth</span>
+            <h3>How broad is the session?</h3>
+          </div>
+          <span class="text-muted small">Computed from returned indices only</span>
+        </div>
+        <div id="breadthPanel" aria-live="polite">
+          <p class="text-muted" style="margin:0;">Breadth will be computed from the indices returned by NSE India.</p>
+        </div>
+      </div>
     </section>
 
-    <section class="market-visuals" aria-labelledby="breadthTitle">
-      <div class="visuals-header">
-        <h2 id="breadthTitle">Market breadth</h2>
+    <!-- Beginner-friendly explanation, ten compact panels. -->
+    <section class="section about-section" id="about" aria-labelledby="aboutTitle">
+      <div class="section-head">
+        <span class="eyebrow">About Clean Data Flow</span>
+        <h2 id="aboutTitle">Ten ideas, in plain language</h2>
+        <p class="section-lede">
+          A short orientation for first-time visitors. No jargon wall — just what the platform
+          does, what it cannot do, and how to read a result responsibly.
+        </p>
       </div>
-      <div id="breadthPanel" aria-live="polite">
-        <p class="text-muted" style="margin:0;">Breadth will be computed from the indices returned by NSE India.</p>
-      </div>
-    </section>
 
-    <section class="market-highlights" aria-labelledby="sourcesTitle">
-      <div class="highlights-grid">
-        <article class="analysis-card">
-          <h3 id="sourcesTitle">Where the data comes from</h3>
-          <p class="muted-copy">
-            Index and constituent data come from NSE India. Historical OHLCV bars come from
-            Yahoo Finance through the backend. The Stock Analyser computes indicators and
-            statistical anomaly scores only from bars the provider actually returned.
-          </p>
-          <p class="muted-copy">
-            Statistical anomalies are unusual observations, not proof of manipulation and not
-            investment advice.
-          </p>
+      <div class="about-grid">
+        <article class="about-item">
+          <span class="about-num">01</span>
+          <h3>What this platform is</h3>
+          <p>Clean Data Flow turns raw NSE market data and provider-supplied price history into readable charts, indicators and anomaly checks.</p>
         </article>
+        <article class="about-item">
+          <span class="about-num">02</span>
+          <h3>Why analyse the data</h3>
+          <p>A price alone hides context. Volume, range and trend help you see whether a move was broad, quiet, sudden or unusual.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">03</span>
+          <h3>What an anomaly means</h3>
+          <p>An anomaly is an observation that differs from its own recent history. It is a prompt to look closer — not proof of manipulation.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">04</span>
+          <h3>Technical indicators</h3>
+          <p>SMA, EMA, RSI and Fibonacci levels summarise trend and momentum using only the bars the provider actually returned.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">05</span>
+          <h3>AI-assisted detection</h3>
+          <p>LOF, autoencoder and transformer models compare the latest bar with historical patterns. They can flag unusual behaviour without explaining its cause.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">06</span>
+          <h3>Volume and price together</h3>
+          <p>A price move on unusually high volume, or price and volume moving in opposite directions, can reveal changing participation.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">07</span>
+          <h3>How to search</h3>
+          <p>Type a well-known company name or an exact symbol, choose NSE or BSE, pick a period and interval, then request real bars.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">08</span>
+          <h3>How to read results</h3>
+          <p>Start with the source and freshness, then the chart, indicators and anomaly notes. If a value is unavailable, it stays unavailable.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">09</span>
+          <h3>Why freshness matters</h3>
+          <p>Daily bars are delayed history, not a live tick feed. The latest bar can still be forming during market hours, and the fetch time and bar time tell you exactly how current the data is.</p>
+        </article>
+        <article class="about-item">
+          <span class="about-num">10</span>
+          <h3>No return guarantees</h3>
+          <p>Past patterns do not guarantee future returns. Nothing here is investment advice, and an anomaly is never proof of wrongdoing.</p>
+        </article>
+      </div>
+    </section>
 
-        <article class="analysis-card">
-          <h3>Backend connection</h3>
-          <p class="muted-copy">
-            The frontend calls <code id="apiBaseLabel">http://localhost:8000</code>.
-            Start it with <code>cd backend</code> and
-            <code>python -m uvicorn main:app --host 127.0.0.1 --port 8000</code>.
+    <!-- Feature cards describe only implemented capabilities. -->
+    <section class="section features-section" id="features" aria-labelledby="featuresTitle">
+      <div class="section-head">
+        <span class="eyebrow">Capabilities</span>
+        <h2 id="featuresTitle">What is actually built</h2>
+        <p class="section-lede">Every card below maps to working code and a real backend response. Nothing is advertised ahead of implementation.</p>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"></path><path d="m6 15 4-4 3 2.5L20 6"></path></svg>
+          </span>
+          <h3>Market data explorer</h3>
+          <p>Browse real NSE indices and their constituent stocks, with search, sorting and session timestamps from the backend.</p>
+          <span class="feature-tag">NSE India</span>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v3M7 17v3M17 4v3M17 17v3"></path><rect x="4.5" y="7" width="5" height="10" rx="1"></rect><rect x="14.5" y="7" width="5" height="10" rx="1"></rect><path d="M9.5 10h5"></path></svg>
+          </span>
+          <h3>Professional price charts</h3>
+          <p>Candlesticks or a close line with aligned volume, zoom, pan, crosshair details and history that comes from the provider.</p>
+          <span class="feature-tag">OHLCV</span>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19h16"></path><path d="M4 15l4-6 4 3 4-7 4 4"></path><circle cx="8" cy="9" r="1"></circle><circle cx="16" cy="5" r="1"></circle></svg>
+          </span>
+          <h3>Technical indicators</h3>
+          <p>SMA, RSI, Fibonacci retracement, EMA deviation and chart price lines — each with an availability state and method note.</p>
+          <span class="feature-tag">SMA · RSI · EMA</span>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20V7"></path></svg>
+          </span>
+          <h3>Volume and price behaviour</h3>
+          <p>Volume-spike, volatility and price–volume divergence checks are computed causally from returned bars, with no invented scores.</p>
+          <span class="feature-tag">Volume analysis</span>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path></svg>
+          </span>
+          <h3>Statistical anomaly detection</h3>
+          <p>LOF, autoencoder and transformer detectors flag unusual latest bars. Historical markers appear only where the backend returns them.</p>
+          <span class="feature-tag">Explainable flags</span>
+        </article>
+        <article class="feature-card">
+          <span class="feature-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v5c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          </span>
+          <h3>Source and freshness first</h3>
+          <p>Every result shows its provider, fetch time and data caveats. No hidden fallbacks, no fabricated candles and no keys in the browser.</p>
+          <span class="feature-tag">Honest status</span>
+        </article>
+      </div>
+    </section>
+
+    <!-- Real headlines from the backend RSS proxy. -->
+    <section class="section news-section" id="news" aria-labelledby="newsTitle">
+      <div class="section-title-row section-head">
+        <div>
+          <span class="eyebrow">Market updates</span>
+          <h2 id="newsTitle">Latest market updates</h2>
+        </div>
+        <span class="text-muted small" id="newsSource">Publisher feed loads from the backend</span>
+      </div>
+      <p class="section-lede news-lede">
+        Publication time comes from the publisher. Retrieval time is when this backend fetched
+        the feed — the two are intentionally shown separately.
+      </p>
+      <div id="newsStatus" class="news-status" role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span> Loading real headlines…
+      </div>
+      <div id="newsGrid" class="news-grid" aria-live="polite"></div>
+      <p id="newsRetrieved" class="news-retrieved"></p>
+    </section>
+
+    <!-- Genuine local analysis history, labelled as this-device storage. -->
+    <section class="section recent-section" id="recent" aria-labelledby="recentTitle">
+      <div class="section-title-row section-head">
+        <div>
+          <span class="eyebrow">Continue where you left off</span>
+          <h2 id="recentTitle">Recent analysis</h2>
+        </div>
+        <a class="text-link" href="stock-analysis.html">New analysis →</a>
+      </div>
+      <p class="section-lede">
+        Saved by this browser after a successful analysis. This is local device history, not a
+        server account and not a portfolio.
+      </p>
+      <div id="recentGrid" class="recent-grid" aria-live="polite"></div>
+      <p id="recentEmpty" class="empty-note hidden">
+        No analyses are stored on this device yet. Run one from the
+        <a href="stock-analysis.html">Stock Analysis</a> page and it will appear here.
+      </p>
+      <p class="storage-note">Stored with <code>localStorage</code> on this device only.</p>
+    </section>
+
+    <!-- Contact and feedback: a real POST endpoint, no fake email address. -->
+    <section class="section contact-section" id="contact" aria-labelledby="contactTitle">
+      <div class="contact-grid">
+        <div class="contact-copy">
+          <span class="eyebrow">Contact &amp; feedback</span>
+          <h2 id="contactTitle">Help shape the next iteration</h2>
+          <p>
+            This is a student project, so there is no support inbox or fake contact address.
+            Feedback submitted here is validated and stored by the FastAPI backend running with
+            this app.
           </p>
-          <button type="button" class="back-btn" id="testBtn">Test backend connection</button>
+          <ul class="contact-points">
+            <li><strong>What helps:</strong> which stock or window you tested, what the chart showed and whether the labels were clear.</li>
+            <li><strong>What happens:</strong> the message is appended to a local JSONL file by the backend. It is not emailed.</li>
+            <li><strong>Hosting caveat:</strong> free-host filesystems may reset on redeploy, so treat storage as best-effort.</li>
+          </ul>
+          <p class="privacy-note">Please do not submit passwords or other sensitive personal information.</p>
+        </div>
+
+        <form id="feedbackForm" class="feedback-card" novalidate>
+          <div class="field-row">
+            <div class="field">
+              <label for="feedbackName">Name <span class="optional">optional</span></label>
+              <input id="feedbackName" name="name" type="text" maxlength="80" autocomplete="name" placeholder="Your name">
+            </div>
+            <div class="field">
+              <label for="feedbackEmail">Email <span class="optional">optional</span></label>
+              <input id="feedbackEmail" name="email" type="email" maxlength="120" autocomplete="email" placeholder="name@example.com">
+            </div>
+          </div>
+
+          <fieldset class="rating-field">
+            <legend>How useful was this page?</legend>
+            <div class="star-rating" id="starRating" role="radiogroup" aria-label="Rating from 1 to 5 stars">
+              <button type="button" class="star" data-value="1" role="radio" aria-checked="false" aria-label="1 out of 5 stars">★</button>
+              <button type="button" class="star" data-value="2" role="radio" aria-checked="false" aria-label="2 out of 5 stars">★</button>
+              <button type="button" class="star" data-value="3" role="radio" aria-checked="false" aria-label="3 out of 5 stars">★</button>
+              <button type="button" class="star" data-value="4" role="radio" aria-checked="false" aria-label="4 out of 5 stars">★</button>
+              <button type="button" class="star" data-value="5" role="radio" aria-checked="false" aria-label="5 out of 5 stars">★</button>
+              <input type="hidden" id="ratingValue" name="rating" value="0">
+            </div>
+            <span class="rating-hint" id="ratingHint">Select 1–5 stars</span>
+          </fieldset>
+
+          <div class="field">
+            <label for="feedbackMessage">Your feedback</label>
+            <textarea id="feedbackMessage" name="message" maxlength="2000" rows="5" placeholder="What worked, what was confusing, or what you would test next…" aria-describedby="feedbackHelp"></textarea>
+            <small id="feedbackHelp">10–2000 characters. The message is stored by the backend; no email is sent.</small>
+          </div>
+
+          <div class="feedback-actions">
+            <button type="submit" id="feedbackSubmit" class="btn-primary">Submit feedback</button>
+            <span class="feedback-note">Real submission · honest success/error state</span>
+          </div>
+          <p id="feedbackStatus" class="feedback-status hidden" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Data provenance and the project disclaimer. -->
+    <section class="section data-section" id="data-sources" aria-labelledby="dataTitle">
+      <div class="section-head">
+        <span class="eyebrow">Transparency</span>
+        <h2 id="dataTitle">Data sources &amp; methodology</h2>
+      </div>
+      <div class="source-grid">
+        <article class="source-card">
+          <span class="source-kicker">Indices &amp; constituents</span>
+          <h3>NSE India</h3>
+          <p>Latest-session index levels and constituent prices through the backend. Not guaranteed live or tick-by-tick, and BSE-only indices such as Sensex are not available from this NSE endpoint.</p>
+        </article>
+        <article class="source-card">
+          <span class="source-kicker">Price history</span>
+          <h3>Yahoo Finance</h3>
+          <p>OHLCV bars fetched by the backend, marked as delayed and interval-dependent. Configured fallback providers are reported in the response source chain; no provider key is exposed to the browser.</p>
+        </article>
+        <article class="source-card">
+          <span class="source-kicker">Market headlines</span>
+          <h3>Economic Times RSS</h3>
+          <p>Publicly published market headlines with publisher links. Headlines, publication times and links pass through unchanged; retrieval time is recorded separately.</p>
+        </article>
+        <article class="source-card">
+          <span class="source-kicker">Backend connection</span>
+          <h3>FastAPI health check</h3>
+          <p>The frontend calls <code id="apiBaseLabel">http://localhost:8000</code>. Test the connection here; no data is invented if it is offline.</p>
+          <button type="button" class="btn-secondary btn-small" id="testBtn">Test backend connection</button>
           <pre id="response" class="response-box" aria-live="polite"></pre>
         </article>
       </div>
     </section>
+
+    <section class="disclaimer-block" id="disclaimer" aria-labelledby="disclaimerTitle">
+      <h2 id="disclaimerTitle">Disclaimer</h2>
+      <p>
+        Clean Data Flow is an educational analytics project. It is not a broker, a trading
+        system or investment advice. Technical indicators describe past behaviour; statistical
+        anomalies are unusual observations, not proof of manipulation and not forecasts.
+        Historical data can be delayed or incomplete, and past patterns do not guarantee future
+        returns.
+      </p>
+    </section>
   </main>
 
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a href="index.html" class="logo" aria-label="Clean Data Flow home">
+          <span class="logo-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 17.5 8 11l4 3.5L21 5"></path>
+              <path d="M15.5 5H21v5.5"></path>
+            </svg>
+          </span>
+          <span class="brand-text">CLEANDATAFLOW</span>
+        </a>
+        <p>See beyond the price. Understand the pattern.</p>
+      </div>
+      <nav class="footer-links" aria-label="Footer navigation">
+        <a href="#about">About</a>
+        <a href="#features">Features</a>
+        <a href="stocks.html">Stocks</a>
+        <a href="#data-sources">Data Sources</a>
+        <a href="#contact">Contact</a>
+        <a href="#disclaimer">Disclaimer</a>
+      </nav>
+    </div>
+    <div class="footer-bottom">
+      <span>© 2026 Clean Data Flow · Educational project</span>
+      <span>Real data only · No fabricated fallbacks</span>
+    </div>
+  </footer>
+
   <script src="config.js"></script>
-  <script src="script.js?v=20261022h"></script>
+  <script src="vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="chart-utils.js?v=20261023c"></script>
+  <script src="script.js?v=20261023c"></script>
   <script>
     (function () {
       const label = document.getElementById("apiBaseLabel");
