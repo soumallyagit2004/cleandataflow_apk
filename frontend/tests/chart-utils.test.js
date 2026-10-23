@@ -80,6 +80,34 @@ test("period/interval compatibility mirrors provider limits", () => {
   assert.deepEqual(CU.periodsForInterval("1d"), CU.PERIODS);
 });
 
+test("timeframe options are honest supported subsets and keep short labels", () => {
+  assert.deepEqual(
+    CU.timeframesForInterval("1d").map((option) => option.period),
+    ["1d", "5d", "1mo", "3mo", "6mo", "1y", "5y"]
+  );
+  assert.deepEqual(
+    CU.timeframesForInterval("1m").map((option) => option.period),
+    ["1d", "5d"]
+  );
+  assert.deepEqual(
+    CU.timeframesForInterval("1h").map((option) => option.period),
+    ["1d", "5d", "1mo", "3mo", "6mo", "1y"]
+  );
+  assert.equal(CU.timeframeLabel("1mo"), "1M");
+  assert.equal(CU.timeframeLabel("5y"), "5Y");
+  assert.equal(CU.timeframeLabel("2y"), "2 years");
+});
+
+test("daily axis labels cannot read like an out-of-order day number", () => {
+  const monthTick = Date.UTC(2026, 7, 1, 18, 30) / 1000;
+  const dayTick = Date.UTC(2026, 7, 13, 18, 30) / 1000;
+  const yearTick = Date.UTC(2026, 0, 1, 18, 30) / 1000;
+
+  assert.match(CU.formatTickMark(monthTick, 1, "1d"), /^[A-Za-z]{3,}$/);
+  assert.match(CU.formatTickMark(dayTick, 2, "1d"), /^\d{1,2}$/);
+  assert.match(CU.formatTickMark(yearTick, 0, "1d"), /^\d{4}$/);
+});
+
 test("reconcileSelection shortens the period when the interval changes", () => {
   const first = CU.reconcileSelection("3mo", "1m", "interval");
   assert.equal(first.changed, true);
@@ -317,7 +345,7 @@ function mappedBarsForMarkers() {
   ]).bars;
 }
 
-test("buildAnomalyMarkers places only real true flags at the evaluated bar", () => {
+test("buildAnomalyMarkers places legacy latest flags as red circles", () => {
   const bars = mappedBarsForMarkers();
   const latest = bars[bars.length - 1];
   const analysis = {
@@ -353,8 +381,8 @@ test("buildAnomalyMarkers places only real true flags at the evaluated bar", () 
   assert.deepEqual(result.markers[0], {
     time: latest.time,
     position: "aboveBar",
-    color: "#7b1fa2",
-    shape: "arrowDown",
+    color: "#ef4444",
+    shape: "circle",
     text: "LOF",
     size: 1,
   });
@@ -373,7 +401,7 @@ test("buildAnomalyMarkers places only real true flags at the evaluated bar", () 
   assert.deepEqual(result.issues, []);
 });
 
-test("buildAnomalyMarkers keeps three simultaneous flags visible", () => {
+test("simultaneous latest flags cluster into one marker per candle", () => {
   const bars = mappedBarsForMarkers();
   const latest = bars[bars.length - 1];
   const block = (overrides) => ({
@@ -392,35 +420,189 @@ test("buildAnomalyMarkers keeps three simultaneous flags visible", () => {
   };
 
   const result = CU.buildAnomalyMarkers(analysis, bars);
-  assert.equal(result.flaggedCount, 3);
+  assert.equal(result.flaggedCount, 1);
+  assert.equal(result.markedCandles, 1);
+  assert.equal(result.pointCount, 3);
+  assert.equal(result.markers[0].text, "3");
+  assert.equal(result.markers[0].shape, "circle");
+  assert.equal(result.markers[0].color, "#ef4444");
+  assert.equal(result.clusters[0].points.length, 3);
+  const flagged = result.entries.filter((entry) => entry.status === "flagged");
   assert.deepEqual(
-    result.markers.map((marker) => marker.position),
-    ["aboveBar", "belowBar", "inBar"]
+    flagged.map((entry) => entry.key).sort(),
+    ["autoencoder_anomaly", "lof_anomaly", "transformer_anomaly"]
   );
-  assert.equal(new Set(result.markers.map((marker) => marker.color)).size, 3);
-  assert.ok(result.entries.every((entry) => entry.status === "flagged"));
-  assert.ok(result.entries.every((entry) => entry.price === 12.5));
+  assert.ok(flagged.every((entry) => entry.price === 12.5));
+});
+
+test("historical points use returned timestamps and one cluster per candle", () => {
+  const bars = mappedBarsForMarkers();
+  const historical = {
+    limitations: ["Historical points use only earlier bars."],
+    detectors: {
+      lof_anomaly: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        method: "walk-forward LOF",
+        points: [
+          {
+            timestamp: "2026-01-01T00:00:00Z",
+            is_anomaly: true,
+            score: 2.2,
+            threshold: 1.4,
+            score_label: "LOF score",
+            explanation: "LOF historical point",
+          },
+        ],
+      },
+      volume_spike: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        points: [
+          {
+            timestamp: "2026-01-02T00:00:00Z",
+            is_anomaly: true,
+            score: 2.8,
+            threshold: 2,
+            score_label: "Volume ratio",
+            explanation: "Volume spike point",
+          },
+        ],
+      },
+      volume_price_divergence: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        detected_bars: 4,
+        points: [
+          {
+            timestamp: "2026-01-02T00:00:00Z",
+            is_anomaly: true,
+            score: null,
+            threshold: null,
+            signal: "bearish",
+            explanation: "Divergence run start",
+          },
+        ],
+      },
+      autoencoder_anomaly: {
+        available: false,
+        historical_available: false,
+        scope: "latest_only",
+        points: [
+          {
+            timestamp: "2026-01-02T00:00:00Z",
+            is_anomaly: true,
+            score: 99,
+          },
+        ],
+        reason: "Autoencoder remains latest-only.",
+      },
+    },
+  };
+  const analysis = {
+    lof_anomaly: {
+      available: true,
+      is_anomaly: false,
+      evaluated_timestamp: "2026-01-03T00:00:00Z",
+    },
+    autoencoder_anomaly: {
+      available: true,
+      is_anomaly: false,
+      evaluated_timestamp: "2026-01-03T00:00:00Z",
+      reconstruction_error: 0.1,
+      threshold: 1,
+    },
+  };
+
+  const result = CU.buildAnomalyMarkers(analysis, bars, historical);
+  assert.equal(result.markedCandles, 2);
+  assert.equal(result.pointCount, 3);
+  assert.equal(result.markers[0].time, bars[0].time);
+  assert.equal(result.markers[1].time, bars[1].time);
+  assert.equal(result.markers[1].text, "2");
+  assert.ok(result.markers.every((marker) => marker.shape === "circle"));
+  assert.ok(result.markers.every((marker) => marker.color === "#ef4444"));
+
+  const ae = result.entries.find((entry) => entry.key === "autoencoder_anomaly");
+  assert.equal(ae.historicalPoints, 0);
+  assert.equal(ae.latestOnly, true);
+  assert.equal(ae.scope, "latest_only");
+  assert.ok(result.latestOnlyKeys.includes("autoencoder_anomaly"));
+  assert.ok(
+    result.limitations.includes("Historical points use only earlier bars.")
+  );
+
+  const cluster = CU.markerClusterAtTime(result, bars[1].timestamp);
+  assert.equal(cluster.points.length, 2);
+  assert.deepEqual(
+    cluster.points.map((point) => point.key).sort(),
+    ["volume_price_divergence", "volume_spike"]
+  );
+  const divergence = cluster.points.find(
+    (point) => point.key === "volume_price_divergence"
+  );
+  assert.equal(divergence.score, null);
+  assert.equal(divergence.threshold, null);
+  assert.equal(divergence.signal, "bearish");
+});
+
+test("duplicate historical timestamps are deduplicated per detector", () => {
+  const bars = mappedBarsForMarkers();
+  const historical = {
+    detectors: {
+      lof_anomaly: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        points: [
+          { timestamp: bars[0].timestamp, is_anomaly: true, score: 2 },
+          { timestamp: bars[0].timestamp, is_anomaly: true, score: 3 },
+        ],
+      },
+    },
+  };
+  const result = CU.buildAnomalyMarkers({}, bars, historical);
+  assert.equal(result.markedCandles, 1);
+  assert.equal(result.pointCount, 1);
+  assert.equal(result.clusters[0].points[0].score, 2);
 });
 
 test("buildAnomalyMarkers never invents a position for an unmatched timestamp", () => {
   const bars = mappedBarsForMarkers();
+  const historical = {
+    detectors: {
+      lof_anomaly: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        points: [
+          {
+            timestamp: "2020-01-01T00:00:00Z",
+            is_anomaly: true,
+            score: 2.5,
+            threshold: 1.5,
+          },
+        ],
+      },
+    },
+  };
   const analysis = {
     lof_anomaly: {
       available: true,
-      is_anomaly: true,
-      evaluated_timestamp: "2020-01-01T00:00:00Z",
-      lof_score: 2.5,
-      threshold: 1.5,
-      explanation: "flagged",
+      is_anomaly: false,
+      evaluated_timestamp: bars[bars.length - 1].timestamp,
     },
   };
 
-  const result = CU.buildAnomalyMarkers(analysis, bars);
+  const result = CU.buildAnomalyMarkers(analysis, bars, historical);
   assert.equal(result.flaggedCount, 0);
   assert.equal(result.markers.length, 0);
-  const lof = result.entries.find((entry) => entry.key === "lof_anomaly");
-  assert.equal(lof.status, "unplaced");
   assert.match(result.issues[0], /does not match a complete returned bar/);
+  const lof = result.entries.find((entry) => entry.key === "lof_anomaly");
+  assert.equal(lof.unplacedPoints, 1);
 });
 
 test("buildAnomalyMarkers rejects an available detector with no boolean flag", () => {
@@ -439,6 +621,54 @@ test("buildAnomalyMarkers rejects an available detector with no boolean flag", (
   assert.equal(result.markers.length, 0);
   const lof = result.entries.find((entry) => entry.key === "lof_anomaly");
   assert.equal(lof.status, "unavailable");
+});
+
+test("latest volume-spike markers infer the last real volume bar and threshold", () => {
+  const bars = mappedBarsForMarkers();
+  bars[bars.length - 1].volume = null;
+  const analysis = {
+    volume_spike: {
+      available: true,
+      signal: "spike",
+      volume_ratio: 3.2,
+      explanation: "latest volume is elevated",
+    },
+  };
+
+  const result = CU.buildAnomalyMarkers(analysis, bars);
+  assert.equal(result.markers.length, 1);
+  assert.equal(result.markers[0].time, bars[1].time);
+  assert.equal(result.markers[0].text, "VOL");
+  const entry = result.entries.find((item) => item.key === "volume_spike");
+  assert.equal(entry.threshold, 2);
+  assert.equal(entry.score, 3.2);
+});
+
+test("dense historical markers suppress labels but keep every circle", () => {
+  const bars = mappedBarsForMarkers();
+  const historical = {
+    detectors: {
+      volume_spike: {
+        available: true,
+        historical_available: true,
+        scope: "historical",
+        points: bars.map((bar) => ({
+          timestamp: bar.timestamp,
+          is_anomaly: true,
+          score: 3,
+          threshold: 2,
+        })),
+      },
+    },
+  };
+  const result = CU.buildAnomalyMarkers({}, bars, historical, {
+    maximumLabels: 1,
+  });
+  assert.equal(result.markers.length, 3);
+  assert.equal(result.labelsSuppressed, true);
+  assert.ok(result.markers.every((marker) => marker.text === ""));
+  assert.ok(result.markers.every((marker) => marker.shape === "circle"));
+  assert.ok(result.markers.every((marker) => marker.size === 0.55));
 });
 
 test("buildAnomalyMarkers returns an honest message when analysis is missing", () => {
@@ -468,6 +698,18 @@ test("buildIndicatorLevels uses only returned SMA, EMA and Fibonacci values", ()
   assert.ok(titles.includes("EMA 9 (latest)"));
   assert.ok(titles.includes("Fib 23.6%"));
   assert.ok(titles.includes("Fib 61.8%"));
+  assert.equal(
+    levels.filter((level) => level.source === "fibonacci").every(
+      (level) => level.axisLabelVisible === false
+    ),
+    true
+  );
+  assert.equal(
+    levels.filter((level) => level.source !== "fibonacci").every(
+      (level) => level.axisLabelVisible === true
+    ),
+    true
+  );
 
   const unavailable = CU.buildIndicatorLevels({
     sma: { available: false, value: null, period: 20 },

@@ -3,22 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Stock Analysis — Real market data, technical indicators, and statistical anomaly detection for NSE/BSE stocks.">
-  <title>Stock Analysis - Clean Data Flow</title>
+  <meta name="description" content="Stock Analyser — real OHLCV data, technical indicators and explainable statistical anomaly detection for NSE/BSE stocks.">
+  <title>Stock Analyser — Clean Data Flow</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20261022h">
+  <script>
+    try {
+      if (localStorage.getItem("clean-data-theme") === "light") {
+        document.documentElement.dataset.theme = "light";
+      }
+    } catch (error) {}
+  </script>
 </head>
 <body class="analysis-page">
+  <div class="background-layer" aria-hidden="true"></div>
 
-  <!-- Background layer — fixed behind all content, respects prefers-reduce-motion -->
-  <div class="background-layer"></div>
-
-  <nav>
+  <nav aria-label="Primary navigation">
     <div class="brand-container">
-      <a href="index.html" class="logo">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <a href="index.html" class="logo" aria-label="CLEANDATAFLOW — Clean Data Flow home">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7"></rect>
           <circle cx="8.5" cy="8.5" r="2.5"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -30,356 +35,243 @@
     <ul class="nav-links">
       <li><a href="index.html">HOME</a></li>
       <li><a href="stocks.html">STOCKS</a></li>
-      <li><a href="stock-analysis.html" class="active">STOCK ANALYSER</a></li>
+      <li class="active"><a href="stock-analysis.html" class="active" aria-current="page">STOCK ANALYSER</a></li>
       <li><a href="wishlist.html">WISHLIST</a></li>
     </ul>
 
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle dark/light mode">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="moonIcon" style="display:block">
-        <circle cx="12" cy="12" r="5"></circle>
-        <line x1="12" y1="1" x2="12" y2="3"></line>
-        <line x1="12" y1="21" x2="12" y2="23"></line>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-        <line x1="1" y1="12" x2="3" y2="12"></line>
-        <line x1="21" y1="12" x2="23" y2="12"></line>
-        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
+      <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
       </svg>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="sunIcon" style="display:none">
-        <circle cx="12" cy="12" r="5"></circle>
-        <line x1="12" y1="1" x2="12" y3="3"></line>
-        <line x1="12" y1="21" x2="12" y2="23"></line>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-        <line x1="1" y1="12" x2="3" y2="12"></line>
-        <line x1="21" y1="12" x2="23" y2="12"></line>
+      <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+        <circle cx="12" cy="12" r="4"></circle>
+        <line x1="12" y1="2" x2="12" y2="4"></line>
+        <line x1="12" y1="20" x2="12" y2="22"></line>
+        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+        <line x1="2" y1="12" x2="4" y2="12"></line>
+        <line x1="20" y1="12" x2="22" y2="12"></line>
+        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
       </svg>
     </button>
   </nav>
 
   <main>
-    <header class="analysis-header">
-      <h1>Stock Analysis</h1>
-      <p class="analysis-subtitle">
-        Historical prices come from Yahoo Finance via yfinance. Every candle, volume bar and
-        indicator value below is derived from the returned bars only &mdash; nothing is simulated,
-        filled in or invented.
+    <header class="analysis-header page-header">
+      <h1>Stock Analyser</h1>
+      <p>
+        Search a stock, then run the analysis. Historical OHLCV comes from Yahoo Finance via the
+        backend; every indicator and anomaly score below is computed only from the bars actually
+        returned — nothing is simulated or filled in.
       </p>
     </header>
 
-    <!-- Search stage: shown initially; dashboard revealed after analysis click -->
-    <div id="searchStage" class="analysis-panel search-stage">
-      <h2 class="section-heading">Analyse a Stock</h2>
+    <!-- Search stage: the only visible controls are the symbol input and the button. -->
+    <section id="searchStage" class="analysis-panel search-stage" aria-labelledby="searchHeading">
+      <h2 id="searchHeading" class="section-heading">Analyse a stock</h2>
       <p class="section-note">
-        Type a stock name, symbol, or ticker (e.g. RELIANCE, TCS, INFY) to find matching
-        listings. Select a suggestion or type manually, then click
-        <strong>Stock Analysis</strong>.
+        Type a company name or NSE symbol (for example RELIANCE, TCS or INFY), choose a
+        suggestion, then click <strong>Stock Analysis</strong>.
       </p>
 
       <form id="analysisForm" class="search-controls" novalidate>
-        <div class="field field-symbol">
-          <label for="symbolInput">Stock symbol</label>
-          <input
-            id="symbolInput"
-            name="symbol"
-            type="text"
-            placeholder="Type stock name, symbol or ticker..."
-            maxlength="30"
-            autocomplete="off"
-            spellcheck="false"
-            required
-          >
-          <small>NSE/BSE ticker without suffix, e.g. RELIANCE, TCS, INFY.</small>
-        </div>
-
-        <div class="field" id="symbolSuggestionsPanel" style="display:none; gap:8px; align-items:flex-end;">
-          <!-- Suggestions injected by JS -->
-        </div>
-
-        <!-- Period/Interval/Exchange hidden initially; revealed after analysis -->
-        <div class="field field-exchange" style="display:none;">
-          <label for="exchangeSelect">Exchange</label>
-          <select id="exchangeSelect" name="exchange">
-            <option value="NSE" selected>NSE</option>
-            <option value="BSE">BSE</option>
-          </select>
-        </div>
-
-        <div class="field field-period" style="display:none;">
-          <label for="periodSelect">Period</label>
-          <select id="periodSelect" name="period">
-            <optgroup label="Days">
-              <option value="1d">1 day</option>
-              <option value="5d">5 days</option>
-            </optgroup>
-            <optgroup label="Months">
-              <option value="1mo">1 month</option>
-              <option value="3mo" selected>3 months</option>
-              <option value="6mo">6 months</option>
-            </optgroup>
-            <optgroup label="Years">
-              <option value="1y">1 year</option>
-              <option value="2y">2 years</option>
-              <option value="5y">5 years</option>
-              <option value="10y">10 years</option>
-            </optgroup>
-            <optgroup label="Other">
-              <option value="ytd">Year to date</option>
-              <option value="max">Max</option>
-            </optgroup>
-          </select>
-        </div>
-
-        <div class="field field-interval" style="display:none;">
-          <label for="intervalSelect">Interval</label>
-          <select id="intervalSelect" name="interval">
-            <optgroup label="Minutes">
-              <option value="1m">1 minute</option>
-              <option value="2m">2 minutes</option>
-              <option value="5m">5 minutes</option>
-              <option value="15m">15 minutes</option>
-              <option value="30m">30 minutes</option>
-              <option value="60m">60 minutes</option>
-              <option value="90m">90 minutes</option>
-            </optgroup>
-            <optgroup label="Hours">
-              <option value="1h">1 hour</option>
-            </optgroup>
-            <optgroup label="Days, weeks and months">
-              <option value="1d" selected>1 day</option>
-              <option value="5d">5 days</option>
-              <option value="1wk">1 week</option>
-              <option value="1mo">1 month</option>
-              <option value="3mo">3 months</option>
-            </optgroup>
-          </select>
+        <div class="symbol-field-wrap">
+          <div class="field field-symbol">
+            <label for="symbolInput">Stock name or symbol</label>
+            <input
+              id="symbolInput"
+              name="symbol"
+              type="text"
+              placeholder="Type a stock name or symbol…"
+              maxlength="30"
+              autocomplete="off"
+              autocapitalize="characters"
+              spellcheck="false"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="symbolSuggestionsPanel"
+              required
+            >
+            <small>Autocomplete uses the real NSE NIFTY 50 constituent list. You can also type an exact symbol.</small>
+          </div>
+          <div id="symbolSuggestionsPanel" role="listbox" aria-label="Matching stocks"></div>
         </div>
 
         <div class="field field-submit">
           <button type="submit" id="analyzeBtn">Stock Analysis</button>
-          <small>Changing period or interval reloads automatically.</small>
+          <small>Default timeframe: 3 months, daily bars, NSE.</small>
+        </div>
+
+        <!-- Functional but intentionally hidden on the initial screen. Deep links
+             and the analysis pipeline still use these values. -->
+        <div class="advanced-fields" aria-hidden="true">
+          <div class="field field-exchange">
+            <label for="exchangeSelect">Exchange</label>
+            <select id="exchangeSelect" name="exchange" tabindex="-1">
+              <option value="NSE" selected>NSE</option>
+              <option value="BSE">BSE</option>
+            </select>
+          </div>
+          <div class="field field-period">
+            <label for="periodSelect">Period</label>
+            <select id="periodSelect" name="period" tabindex="-1">
+              <optgroup label="Days">
+                <option value="1d">1 day</option>
+                <option value="5d">5 days</option>
+              </optgroup>
+              <optgroup label="Months">
+                <option value="1mo">1 month</option>
+                <option value="3mo" selected>3 months</option>
+                <option value="6mo">6 months</option>
+              </optgroup>
+              <optgroup label="Years">
+                <option value="1y">1 year</option>
+                <option value="2y">2 years</option>
+                <option value="5y">5 years</option>
+                <option value="10y">10 years</option>
+              </optgroup>
+              <optgroup label="Other">
+                <option value="ytd">Year to date</option>
+                <option value="max">Maximum</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="field field-interval">
+            <label for="intervalSelect">Interval</label>
+            <select id="intervalSelect" name="interval" tabindex="-1">
+              <optgroup label="Minutes">
+                <option value="1m">1 minute</option>
+                <option value="2m">2 minutes</option>
+                <option value="5m">5 minutes</option>
+                <option value="15m">15 minutes</option>
+                <option value="30m">30 minutes</option>
+                <option value="60m">60 minutes</option>
+                <option value="90m">90 minutes</option>
+              </optgroup>
+              <optgroup label="Hours">
+                <option value="1h">1 hour</option>
+              </optgroup>
+              <optgroup label="Days, weeks and months">
+                <option value="1d" selected>1 day</option>
+                <option value="5d">5 days</option>
+                <option value="1wk">1 week</option>
+                <option value="1mo">1 month</option>
+                <option value="3mo">3 months</option>
+              </optgroup>
+            </select>
+          </div>
         </div>
       </form>
 
       <p id="selectionNote" class="selection-note hidden" role="status" aria-live="polite"></p>
-    </div>
-
-    <!-- Dashboard stage: hidden until analysis completes -->
-    <div id="dashboardStage" class="analysis-panel dashboard-stage hidden" role="main">
-      <div class="field field-symbol">
-        <label for="symbolInput">Stock symbol</label>
-        <input
-          id="symbolInput"
-          name="symbol"
-          type="text"
-          placeholder="RELIANCE"
-          maxlength="30"
-          autocomplete="off"
-          spellcheck="false"
-          required
-        >
-        <small>NSE/BSE ticker without suffix, e.g. RELIANCE, TCS, INFY.</small>
-      </div>
-
-      <div class="field">
-        <label for="exchangeSelect">Exchange</label>
-        <select id="exchangeSelect" name="exchange">
-          <option value="NSE" selected>NSE</option>
-          <option value="BSE">BSE</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="periodSelect">Period</label>
-        <select id="periodSelect" name="period">
-          <optgroup label="Days">
-            <option value="1d">1 day</option>
-            <option value="5d">5 days</option>
-          </optgroup>
-          <optgroup label="Months">
-            <option value="1mo">1 month</option>
-            <option value="3mo" selected>3 months</option>
-            <option value="6mo">6 months</option>
-          </optgroup>
-          <optgroup label="Years">
-            <option value="1y">1 year</option>
-            <option value="2y">2 years</option>
-            <option value="5y">5 years</option>
-            <option value="10y">10 years</option>
-          </optgroup>
-          <optgroup label="Other">
-            <option value="ytd">Year to date</option>
-            <option value="max">Max</option>
-          </optgroup>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="intervalSelect">Interval</label>
-        <select id="intervalSelect" name="interval">
-          <optgroup label="Minutes">
-            <option value="1m">1 minute</option>
-            <option value="2m">2 minutes</option>
-            <option value="5m">5 minutes</option>
-            <option value="15m">15 minutes</option>
-            <option value="30m">30 minutes</option>
-            <option value="60m">60 minutes</option>
-            <option value="90m">90 minutes</option>
-          </optgroup>
-          <optgroup label="Hours">
-            <option value="1h">1 hour</option>
-          </optgroup>
-          <optgroup label="Days, weeks and months">
-            <option value="1d" selected>1 day</option>
-            <option value="5d">5 days</option>
-            <option value="1wk">1 week</option>
-            <option value="1mo">1 month</option>
-            <option value="3mo">3 months</option>
-          </optgroup>
-        </select>
-      </div>
-
-      <div class="field field-submit">
-        <button type="submit" id="analyzeBtn">Analyze</button>
-        <small>Changing period or interval reloads automatically.</small>
-      </div>
-    </form>
-
-    <p id="selectionNote" class="selection-note hidden" role="status" aria-live="polite"></p>
-
-    <!-- Loading / error / information messages -->
-    <div id="analysisStatus" class="analysis-status hidden" role="status" aria-live="polite"></div>
-
-    <!-- Data source details -->
-    <section id="metaPanel" class="analysis-panel hidden" aria-labelledby="metaHeading">
-      <div class="panel-heading">
-        <h2 id="metaHeading">Data source</h2>
-        <span id="metaBadge" class="meta-badge"></span>
-      </div>
-      <dl id="metaList" class="meta-list"></dl>
+      <div id="analysisStatus" class="analysis-status hidden" role="status" aria-live="polite"></div>
     </section>
 
-    <!-- Price and volume charts -->
-    <section id="chartPanel" class="analysis-panel hidden" aria-labelledby="chartHeading">
-      <div class="panel-heading chart-head">
-        <div>
-          <h2 id="chartHeading">Price & volume</h2>
-          <p class="panel-subtitle">
-            Actual returned OHLC bars. Scroll to zoom, drag to pan, and hover for OHLCV details.
+    <!-- Dashboard stage: revealed only after a successful analysis response. -->
+    <div id="dashboardStage" class="dashboard-stage hidden">
+      <section id="timeframePanel" class="timeframe-panel" aria-labelledby="timeframeHeading">
+        <div class="timeframe-copy">
+          <span class="eyebrow">Historical window</span>
+          <h2 id="timeframeHeading">Timeframe</h2>
+          <p id="timeframeHint">
+            Choose a window to reload the same stock. Only provider-supported windows are shown.
           </p>
         </div>
-        <div class="chart-controls" role="group" aria-label="Chart controls">
-          <div class="segmented" role="group" aria-label="Price display">
-            <button type="button" id="modeCandles" class="chart-btn active" aria-pressed="true">Candles</button>
-            <button type="button" id="modeLine" class="chart-btn" aria-pressed="false">Line</button>
-          </div>
-          <label class="chart-check"><input type="checkbox" id="volumeToggle" checked> Volume</label>
-          <label class="chart-check"><input type="checkbox" id="levelsToggle" checked> Latest levels</label>
-          <button type="button" id="resetZoom" class="chart-btn">Reset zoom</button>
+        <div id="timeframeControls" class="timeframe-controls" role="group" aria-label="Historical timeframe"></div>
+        <p id="timeframeStatus" class="timeframe-status" role="status" aria-live="polite"></p>
+      </section>
+
+      <section id="metaPanel" class="analysis-panel" aria-labelledby="metaHeading">
+        <div class="panel-heading">
+          <h2 id="metaHeading">Data source</h2>
+          <span id="metaBadge" class="meta-badge"></span>
         </div>
-      </div>
+        <dl id="metaList" class="meta-list"></dl>
+      </section>
 
-      <div id="chartLegend" class="chart-legend" aria-live="polite">
-        <span class="legend-hint">Hover the chart for OHLCV details.</span>
-      </div>
+      <section id="chartPanel" class="analysis-panel" aria-labelledby="chartHeading">
+        <div class="panel-heading chart-head">
+          <div>
+            <h2 id="chartHeading">Price &amp; volume</h2>
+            <p class="panel-subtitle">
+              Actual returned OHLC bars. Scroll to zoom, drag to pan, and hover for OHLCV details.
+            </p>
+          </div>
+          <div class="chart-controls" role="group" aria-label="Chart controls">
+            <div class="segmented" role="group" aria-label="Price display">
+              <button type="button" id="modeCandles" class="chart-btn active" aria-pressed="true">Candles</button>
+              <button type="button" id="modeLine" class="chart-btn" aria-pressed="false">Line</button>
+            </div>
+            <label class="chart-check"><input type="checkbox" id="volumeToggle" checked> Volume</label>
+            <label class="chart-check"><input type="checkbox" id="levelsToggle" checked> Latest levels</label>
+            <button type="button" id="resetZoom" class="chart-btn">Reset zoom</button>
+          </div>
+        </div>
 
-      <div
-        id="priceChart"
-        class="chart-canvas"
-        role="img"
-        aria-label="Candlestick price chart with an aligned volume histogram"
-      ></div>
+        <div id="chartLegend" class="chart-legend" aria-live="polite">
+          <span class="legend-hint">Hover the chart for OHLCV details.</span>
+        </div>
 
-      <p id="chartNote" class="chart-note"></p>
+        <div id="chartCanvasWrap" class="chart-canvas-wrap">
+          <div
+            id="priceChart"
+            class="chart-canvas"
+            role="img"
+            aria-label="Candlestick price chart with an aligned volume histogram and anomaly markers"
+          ></div>
+          <div
+            id="anomalyMarkerTooltip"
+            class="anomaly-marker-tooltip hidden"
+            role="tooltip"
+            aria-live="polite"
+          ></div>
+        </div>
 
-      <div id="anomalyLegend" class="anomaly-legend hidden" aria-live="polite"></div>
+        <p id="chartNote" class="chart-note"></p>
+        <div id="anomalyLegend" class="anomaly-legend hidden" aria-live="polite"></div>
+        <p class="chart-attribution">
+          Charting: TradingView Lightweight Charts v4.2.3 (Apache-2.0), vendored locally in
+          <code>vendor/</code>.
+        </p>
+      </section>
 
-      <p class="chart-attribution">
-        Charting: TradingView Lightweight Charts v4.2.3 (Apache-2.0), vendored locally in
-        <code>vendor/</code>.
-      </div>
-    </section>
+      <section id="indicatorPanel" aria-labelledby="indicatorHeading">
+        <h2 id="indicatorHeading" class="section-heading">Indicator overlays &amp; derived indicators</h2>
+        <p class="section-note">
+          SMA, EMA and Fibonacci price lines are shown only when the backend returns a usable
+          value. Those lines are latest values, not historical series.
+        </p>
+        <div id="indicatorGrid" class="analysis-grid"></div>
+      </section>
 
-    <!-- Indicator cards -->
-    <section id="indicatorPanel" class="hidden" aria-labelledby="indicatorHeading">
-      <h2 id="indicatorHeading" class="section-heading">Indicator overlays & derived indicators</h2>
-      <p class="section-note">
-        These values are computed from the returned bars. SMA, EMA and Fibonacci price lines are
-        shown only when the backend returns a usable value; the SMA/EMA lines are latest values,
-        not historical series.
+      <section id="anomalyPanel" aria-labelledby="anomalyHeading">
+        <h2 id="anomalyHeading" class="section-heading">Statistical anomaly detections</h2>
+        <p class="section-note">
+          Red circles mark only candles for which a supported detector returned an anomaly.
+          LOF, volume spike, volatility anomaly and volume–price divergence are evaluated
+          causally on historical bars. Autoencoder and Transformer remain latest-complete-bar
+          checks and are never drawn as historical markers. Divergence is a signal without a
+          numeric threshold; no score is invented for it. A flagged observation is not proof of
+          manipulation and not a trading signal.
+        </p>
+        <div id="anomalyGrid" class="analysis-grid"></div>
+      </section>
+
+      <p class="disclaimer">
+        These indicators describe past price and volume behaviour. They are not predictions and
+        not investment advice. Unavailable values are shown as “Unavailable”, never as made-up
+        numbers. Statistical anomaly detectors can flag unusual observations without any market
+        manipulation occurring.
       </p>
-      <div id="indicatorGrid" class="analysis-grid"></div>
-    </section>
-
-    <!-- Statistical anomaly cards -->
-    <section id="anomalyPanel" class="hidden" aria-labelledby="anomalyHeading">
-      <h2 id="anomalyHeading" class="section-heading">Statistical anomaly detections</h2>
-      <p class="section-note">
-        LOF, Autoencoder and Transformer score only the latest complete returned bar. A flagged
-        marker is a statistical outlier, not proof of manipulation and not a trading signal.
-        Historical anomaly timelines are not shown because the backend does not return per-bar
-        model scores.
-      </p>
-      <div id="anomalyGrid" class="analysis-grid"></div>
-    </section>
-
-    <p class="disclaimer">
-      These indicators describe past price and volume behaviour. They are not predictions and not
-      investment advice. Unavailable values are shown as &ldquo;Unavailable&rdquo;, never as made-up
-      numbers. Statistical anomaly detectors can flag unusual observations without any market
-      manipulation occurring.
-    </p>
+    </div>
   </main>
 
-  <!-- script.js provides API_BASE and shared formatters -->
-  <script src="script.js"></script>
-  <script>
-    // ---------- Theme toggle initialization ----------
-    document.addEventListener('DOMContentLoaded', () => {
-      const themeToggle = document.getElementById('themeToggle');
-      const moonIcon = document.getElementById('moonIcon');
-      const sunIcon = document.getElementById('sunIcon');
-
-      if (!themeToggle) return;
-
-      // Check for saved theme or prefers-color-scheme
-      const savedTheme = localStorage.getItem('clean-data-theme');
-      const prefersLight = window.matchMedia('(prefers-color-scheme: light)').matches;
-
-      if (savedTheme === 'light') {
-        document.body.classList.add('light');
-        moonIcon.style.display = 'none';
-        sunIcon.style.display = 'block';
-      } else if (savedTheme === 'dark') {
-        document.body.classList.remove('light');
-        moonIcon.style.display = 'block';
-        sunIcon.style.display = 'none';
-      } else {
-        if (prefersLight) {
-          document.body.classList.add('light');
-          moonIcon.style.display = 'none';
-          sunIcon.style.display = 'block';
-        }
-      }
-
-      themeToggle.addEventListener('click', () => {
-        if (document.body.classList.contains('light')) {
-          document.body.classList.remove('light');
-          localStorage.setItem('clean-data-theme', 'dark');
-          moonIcon.style.display = 'block';
-          sunIcon.style.display = 'none';
-        } else {
-          document.body.classList.add('light');
-          localStorage.setItem('clean-data-theme', 'light');
-          moonIcon.style.display = 'none';
-          sunIcon.style.display = 'block';
-        }
-      });
-    });
-  </script>
+  <script src="config.js"></script>
+  <script src="script.js?v=20261022h"></script>
   <script src="vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="chart-utils.js?v=20261022"></script>
-  <script src="analysis.js?v=20261022"></script>
+  <script src="chart-utils.js?v=20261022h"></script>
+  <script src="analysis.js?v=20261022h"></script>
 </body>
 </html>

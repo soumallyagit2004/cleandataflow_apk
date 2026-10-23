@@ -1,7 +1,14 @@
-// ---------- Stock Analysis page ----------
-// Fetches real bars from GET /api/market/history?analyze=true and renders them
-// with TradingView Lightweight Charts. No prices, candles or indicator values
-// are generated on the client.
+/*
+ * Stock Analyser page.
+ *
+ * Fetches real bars from GET /api/market/history and renders them with the
+ * vendored TradingView Lightweight Charts build. No price, candle, indicator
+ * or anomaly value is generated on the client.
+ *
+ * Initial interface contract: exactly two visible controls — the symbol input
+ * (with autocomplete) and the "Stock Analysis" button. Exchange/period/interval
+ * remain functional but hidden, with NSE / 3mo / 1d as defaults.
+ */
 
 const API_ROOT =
   typeof API_BASE !== "undefined" ? API_BASE : "http://localhost:8000";
@@ -9,319 +16,159 @@ const CU = typeof window !== "undefined" ? window.ChartUtils : null;
 const REQUEST_TIMEOUT_MS = 120000;
 let timedOut = false;
 
-// ---------- Initialise ----------
-document.addEventListener('DOMContentLoaded', () => {
-  // Initially show the search stage, hide the dashboard stage
-  const searchStage = document.getElementById('searchStage');
-  const dashboardStage = document.getElementById('dashboardStage');
+/* ==========================================================================
+   DOM
+   ========================================================================== */
 
-  if (searchStage) searchStage.classList.remove('hidden');
-  if (dashboardStage) dashboardStage.classList.add('hidden');
+const els = {
+  form: document.getElementById("analysisForm"),
+  symbol: document.getElementById("symbolInput"),
+  suggestions: document.getElementById("symbolSuggestionsPanel"),
+  exchange: document.getElementById("exchangeSelect"),
+  period: document.getElementById("periodSelect"),
+  interval: document.getElementById("intervalSelect"),
+  analyzeBtn: document.getElementById("analyzeBtn"),
+  status: document.getElementById("analysisStatus"),
+  selectionNote: document.getElementById("selectionNote"),
+  searchStage: document.getElementById("searchStage"),
+  dashboardStage: document.getElementById("dashboardStage"),
+  timeframePanel: document.getElementById("timeframePanel"),
+  timeframeControls: document.getElementById("timeframeControls"),
+  timeframeStatus: document.getElementById("timeframeStatus"),
+  metaPanel: document.getElementById("metaPanel"),
+  metaList: document.getElementById("metaList"),
+  metaBadge: document.getElementById("metaBadge"),
+  chartPanel: document.getElementById("chartPanel"),
+  chartLegend: document.getElementById("chartLegend"),
+  chartCanvasWrap: document.getElementById("chartCanvasWrap"),
+  priceChart: document.getElementById("priceChart"),
+  markerTooltip: document.getElementById("anomalyMarkerTooltip"),
+  chartNote: document.getElementById("chartNote"),
+  anomalyLegend: document.getElementById("anomalyLegend"),
+  indicatorPanel: document.getElementById("indicatorPanel"),
+  indicatorGrid: document.getElementById("indicatorGrid"),
+  anomalyPanel: document.getElementById("anomalyPanel"),
+  anomalyGrid: document.getElementById("anomalyGrid"),
+  modeCandles: document.getElementById("modeCandles"),
+  modeLine: document.getElementById("modeLine"),
+  volumeToggle: document.getElementById("volumeToggle"),
+  levelsToggle: document.getElementById("levelsToggle"),
+  resetZoom: document.getElementById("resetZoom"),
+};
 
-  if (!CU) {
-    setStatus(
-      "error",
-      "Chart helpers failed to load. Check that chart-utils.js is present."
-    );
-    if (searchStage) searchStage.classList.add('hidden');
-    return;
-  }
+const state = {
+  guard: CU ? new CU.RequestGuard() : null,
+  chart: null,
+  candleSeries: null,
+  lineSeries: null,
+  volumeSeries: null,
+  resizeObserver: null,
+  priceLines: [],
+  markers: [],
+  markerResult: null,
+  mapped: null,
+  lastData: null,
+  selection: null,
+  loadedSelection: null,
+  interval: "1d",
+  mode: "candles",
+  showLevels: true,
+  showVolume: true,
+  loading: false,
+  activeSuggestion: -1,
+  hoveredAnomalyTime: null,
+  pinnedAnomalyTime: null,
+  markerPointer: null,
+  refreshKeepsResults: false,
+  activeRequestKey: null,
+};
 
-  // If there are deep-link params, pre-fill the symbol but still require
-  // the user to click "Stock Analysis" to begin.
-  restoreFromUrl();
+/* ==========================================================================
+   Formatting and escaping helpers
+   ========================================================================== */
 
-  wireEvents();
-});
-
-// ---------- Fetch and render ----------
-
-// ---------- Symbol autocomplete suggestions ----------
-
-let symbolSearchTimeout = null;
-
-function showSymbolSuggestions(symbol, indices) {
-  const panel = document.getElementById('symbolSuggestionsPanel');
-  const input = document.getElementById('symbolInput');
-
-  if (!panel || !input) return;
-
-  if (!symbol || symbol.length < 1) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
-    return;
-  }
-
-  const matches = indices.filter(idx =>
-    idx.symbol.toUpperCase().includes(symbol.toUpperCase()) ||
-    idx.name.toUpperCase().includes(symbol.toUpperCase())
-  );
-
-  if (matches.length === 0) {
-    panel.style.display = 'none';
-    panel.innerHTML = '<p class="text-muted small">No matching indices found.</p>';
-    return;
-  }
-
-  panel.style.display = 'block';
-  panel.innerHTML = matches.slice(0, 8).map(idx => `
-    <div style="padding:6px 10px; border:1px solid var(--border-mute); border-radius:var(--radius-sm); background:var(--bg-input); cursor:pointer; transition:all var(--transition-fast);">
-      <strong style="color:var(--accent-cyan);">${escapeHtml(idx.symbol)}</strong>
-      <span style="color:var(--text-secondary); font-size:12px;">${escapeHtml(idx.name)}</span>
-    </div>
-  `).join('');
-
-  // Add click handlers
-  panel.querySelectorAll('div').forEach((div) => {
-    div.addEventListener('click', () => {
-      const symbol = div.querySelector('strong').textContent;
-      input.value = symbol;
-      panel.style.display = 'none';
-      panel.innerHTML = '';
-      if (els.form) els.form.requestSubmit();
-    });
-  });
+function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
+  const div = document.createElement("div");
+  div.textContent = String(value);
+  return div.innerHTML;
 }
 
-function hideSymbolSuggestions() {
-  const panel = document.getElementById('symbolSuggestionsPanel');
-  if (panel) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
-  }
+function escapeAttr(value) {
+  return escapeHtml(value)
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-// Debounced search for symbol suggestions
-function loadSymbolSuggestions(symbol) {
-  if (symbolSearchTimeout) {
-    clearTimeout(symbolSearchTimeout);
-  }
-  symbolSearchTimeout = setTimeout(() => {
-    fetch(`${API_BASE}/api/indices`)
-      .then(res => {
-        if (!res.ok) throw new Error('Backend returned ' + res.status);
-        return res.json();
-      })
-      .then(data => {
-        showSymbolSuggestions(symbol, data.indices || []);
-      })
-      .catch(err => {
-        console.error(err);
-        showSymbolSuggestions(symbol, []);
-      });
-  }, 300);
+function fmtValue(value, digits) {
+  if (!CU) return "—";
+  return CU.formatPrice(value, digits == null ? 2 : digits);
 }
 
-// ---------- Event wiring ----------
-
-function wireEvents() {
-  if (!els.form) return;
-
-  // Auto-complete symbol suggestions on keystroke
-  if (els.symbol) {
-    els.symbol.addEventListener('input', (e) => {
-      const symbol = e.target.value.trim();
-      loadSymbolSuggestions(symbol);
-    });
-
-    // Hide suggestions when clicking outside
-    document.addEventListener('click', (e) => {
-      const symbolInput = els.symbol;
-      const suggestionsPanel = document.getElementById('symbolSuggestionsPanel');
-      if (suggestionsPanel && !symbolInput.contains(e.target) && !suggestionsPanel.contains(e.target)) {
-        hideSymbolSuggestions();
-      }
-    });
-  }
-
-  els.form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    hideSelectionNote();
-
-    const selection = selectionFromControls();
-    const check = CU.validateSymbol(selection.symbol);
-    if (!check.valid) {
-      cancelActiveRequest();
-      clearResults();
-      setStatus("error", check.message || "Enter a stock symbol first.");
-      if (els.symbol) els.symbol.focus();
-      return;
-    }
-    selection.symbol = check.symbol;
-    if (els.symbol) els.symbol.value = check.symbol;
-
-    // Hide suggestions on submit
-    hideSymbolSuggestions();
-
-    // Reconcile period/interval
-    const reconciled = CU.reconcileSelection(
-      selection.period,
-      selection.interval,
-      "period"
-    );
-    if (reconciled.changed) {
-      selection.period = reconciled.period;
-      selection.interval = reconciled.interval;
-      if (els.period) els.period.value = reconciled.period;
-      showSelectionNote(reconciled.message);
-    }
-
-    // Transition from search stage to dashboard stage
-    const searchStage = document.getElementById('searchStage');
-    const dashboardStage = document.getElementById('dashboardStage');
-    if (searchStage) searchStage.classList.add('hidden');
-    if (dashboardStage) dashboardStage.classList.remove('hidden');
-
-    runAnalysis(selection);
-  });
-
-  if (els.period) {
-    els.period.addEventListener("change", () => {
-      const reconciled = CU.reconcileSelection(
-        els.period.value,
-        els.interval.value,
-        "period"
-      );
-      if (reconciled.changed) {
-        els.interval.value = reconciled.interval;
-        showSelectionNote(reconciled.message);
-      } else {
-        hideSelectionNote();
-      }
-    });
-  }
-
-  if (els.interval) {
-    els.interval.addEventListener("change", () => {
-      const reconciled = CU.reconcileSelection(
-        els.period.value,
-        els.interval.value,
-        "interval"
-      );
-      if (reconciled.changed) {
-        els.period.value = reconciled.period;
-        showSelectionNote(reconciled.message);
-      } else {
-        hideSelectionNote();
-      }
-    });
-  }
-
-  if (els.exchange) {
-    els.exchange.addEventListener("change", () => {
-      hideSelectionNote();
-    });
-  }
-
-  if (els.modeCandles) {
-    els.modeCandles.addEventListener("click", () => setMode("candles"));
-  }
-  if (els.modeLine) {
-    els.modeLine.addEventListener("click", () => setMode("line"));
-  }
-  if (els.volumeToggle) {
-    els.volumeToggle.addEventListener("change", () => {
-      setVolumeVisible(els.volumeToggle.checked);
-    });
-  }
-  if (els.levelsToggle) {
-    els.levelsToggle.addEventListener("change", () => {
-      state.showLevels = els.levelsToggle.checked;
-      if (state.lastData) {
-        applyLevels(state.lastData.analysis);
-        renderChartNote(
-          state.mapped,
-          state.lastData,
-          state.volumeSeries ? !els.volumeToggle.disabled : false
-        );
-      }
-    });
-  }
-  if (els.resetZoom) {
-    els.resetZoom.addEventListener("click", resetZoom);
-  }
+function fmtVolume(value) {
+  if (!CU) return "—";
+  return CU.formatVolume(value, true);
 }
 
-// ---------- Symbol autocomplete suggestions (inline) ----------
-
-function showInlineSuggestions(symbol, indices) {
-  const panel = document.getElementById('symbolSuggestionsPanel');
-  const input = document.getElementById('symbolInput');
-
-  if (!panel || !input) return;
-
-  if (!symbol || symbol.length < 1) {
-    panel.style.display = 'none';
-    panel.innerHTML = '';
-    return;
-  }
-
-  const matches = indices.filter(idx =>
-    idx.symbol.toUpperCase().includes(symbol.toUpperCase()) ||
-    idx.name.toUpperCase().includes(symbol.toUpperCase())
-  );
-
-  if (matches.length === 0) {
-    panel.style.display = 'none';
-    panel.innerHTML = '<p class="text-muted small">No matching indices found.</p>';
-    return;
-  }
-
-  panel.style.display = 'block';
-  panel.innerHTML = matches.slice(0, 8).map(idx => `
-    <div style="padding:6px 10px; border:1px solid var(--border-mute); border-radius:var(--radius-sm); background:var(--bg-input); cursor:pointer; transition:all var(--transition-fast);">
-      <strong style="color:var(--accent-cyan);">${escapeHtml(idx.symbol)}</strong>
-      <span style="color:var(--text-secondary); font-size:12px;">${escapeHtml(idx.name)}</span>
-    </div>
-  `).join('');
-
-  panel.querySelectorAll('div').forEach((div) => {
-    div.addEventListener('click', () => {
-      const symbol = div.querySelector('strong').textContent;
-      input.value = symbol;
-      panel.style.display = 'none';
-      panel.innerHTML = '';
-      if (els.form) els.form.requestSubmit();
-    });
-  });
+function fmtTime(iso, interval) {
+  if (!CU) return "—";
+  return CU.formatTime(iso, interval || state.interval);
 }
 
-// ---------- Status and panels ----------
+function fmtDateTime(iso) {
+  if (!CU) return "—";
+  return CU.formatDateTime(iso);
+}
 
-function setStatus(kind, message) {
+function fmtSignedValue(value, digits = 2) {
+  const number = CU ? CU.finiteNumber(value) : null;
+  if (number === null) return "—";
+  const sign = number > 0 ? "+" : "";
+  return `${sign}${fmtValue(number, digits)}`;
+}
+
+function methodText(method) {
+  if (!method || typeof method !== "string") return "";
+  return `<p class="method"><strong>Method:</strong> ${escapeHtml(method)}</p>`;
+}
+
+function explainText(explanation) {
+  if (!explanation || typeof explanation !== "string") return "";
+  return `<p class="explain">${escapeHtml(explanation)}</p>`;
+}
+
+/* ==========================================================================
+   Status, notes and busy state
+   ========================================================================== */
+
+function setStatus(kind, message, retryAction) {
   if (!els.status) return;
+
+  els.status.innerHTML = "";
+
+  const text = document.createElement("span");
+  text.className = "status-text";
+  text.textContent = message;
+  els.status.appendChild(text);
+
+  if (typeof retryAction === "function") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "retry-btn";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", retryAction);
+    els.status.appendChild(retry);
+  }
+
   els.status.className = `analysis-status ${kind}`;
-  els.status.textContent = message;
   els.status.classList.remove("hidden");
 }
 
-// ---------- Selection from controls ----------
-
-function selectionFromControls() {
-  return {
-    symbol: els.symbol ? els.symbol.value.trim().toUpperCase() : "",
-    exchange: els.exchange ? els.exchange.value : "NSE",
-    period: els.period ? els.period.value : "3mo",
-    interval: els.interval ? els.interval.value : "1d",
-  };
+function hideStatus() {
+  if (!els.status) return;
+  els.status.className = "analysis-status hidden";
+  els.status.innerHTML = "";
 }
-
-// ---------- URL and deep links ----------
-
-function restoreFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const symbol = params.get("symbol");
-  const exchange = params.get("exchange");
-
-  if (symbol) {
-    els.symbol.value = symbol.toUpperCase();
-    if (exchange) {
-      els.exchange.value = exchange.toUpperCase();
-    }
-  }
-}
-
-// ---------- Status and panels ----------
 
 function showSelectionNote(message) {
   if (!els.selectionNote || !message) return;
@@ -335,125 +182,393 @@ function hideSelectionNote() {
   els.selectionNote.classList.add("hidden");
 }
 
-function hideResults() {
-  ["metaPanel", "chartPanel", "indicatorPanel", "anomalyPanel"].forEach((id) => {
-    const panel = document.getElementById(id);
-    if (panel) panel.classList.add("hidden");
+function setBusy(isBusy) {
+  state.loading = Boolean(isBusy);
+  if (els.analyzeBtn) {
+    els.analyzeBtn.disabled = Boolean(isBusy);
+    els.analyzeBtn.textContent = isBusy ? "Analysing…" : "Stock Analysis";
+    els.analyzeBtn.setAttribute("aria-busy", String(Boolean(isBusy)));
+  }
+  if (els.form) els.form.setAttribute("aria-busy", String(Boolean(isBusy)));
+  if (els.dashboardStage) {
+    els.dashboardStage.setAttribute("aria-busy", String(Boolean(isBusy)));
+  }
+  if (els.timeframeControls) {
+    els.timeframeControls
+      .querySelectorAll(".timeframe-btn")
+      .forEach((button) => {
+        button.disabled = Boolean(isBusy);
+      });
+  }
+}
+
+function shortPeriodLabel(period) {
+  const custom = {
+    "2y": "2Y",
+    "10y": "10Y",
+    ytd: "YTD",
+    max: "MAX",
+  };
+  return custom[period] || CU.timeframeLabel(period);
+}
+
+function renderTimeframeOptions(interval, activePeriod) {
+  if (!els.timeframeControls || !CU) return;
+
+  const options = CU.timeframesForInterval(interval);
+  if (
+    activePeriod &&
+    CU.isCompatible(activePeriod, interval) &&
+    !options.some((option) => option.period === activePeriod)
+  ) {
+    options.push({
+      period: activePeriod,
+      label: shortPeriodLabel(activePeriod),
+      title: CU.periodLabel(activePeriod),
+    });
+  }
+  options.sort(
+    (a, b) => CU.PERIODS.indexOf(a.period) - CU.PERIODS.indexOf(b.period)
+  );
+
+  els.timeframeControls.innerHTML = options
+    .map((option) => {
+      const active = option.period === activePeriod;
+      return `<button
+        type="button"
+        class="timeframe-btn${active ? " active" : ""}"
+        data-period="${escapeAttr(option.period)}"
+        aria-pressed="${active ? "true" : "false"}"
+        title="Load ${escapeAttr(option.title)} for the current stock"
+      >${escapeHtml(option.label)}</button>`;
+    })
+    .join("");
+
+  setBusy(state.loading);
+}
+
+function markTimeframeActive(period) {
+  if (!els.timeframeControls) return;
+  els.timeframeControls
+    .querySelectorAll(".timeframe-btn")
+    .forEach((button) => {
+      const active = button.getAttribute("data-period") === period;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+}
+
+function setTimeframeStatus(kind, message) {
+  if (!els.timeframeStatus) return;
+  els.timeframeStatus.className = "timeframe-status";
+  if (!message) {
+    els.timeframeStatus.textContent = "";
+    els.timeframeStatus.classList.add("hidden");
+    return;
+  }
+  els.timeframeStatus.textContent = message;
+  els.timeframeStatus.classList.add(kind);
+  els.timeframeStatus.classList.remove("hidden");
+}
+
+function setChartRefreshing(refreshing) {
+  if (els.chartCanvasWrap) {
+    els.chartCanvasWrap.classList.toggle(
+      "is-loading",
+      Boolean(refreshing)
+    );
+  }
+}
+
+/* ==========================================================================
+   Selection and URL
+   ========================================================================== */
+
+function selectionFromControls() {
+  return {
+    symbol: els.symbol ? els.symbol.value.trim().toUpperCase() : "",
+    exchange: els.exchange ? els.exchange.value : "NSE",
+    period: els.period ? els.period.value : "3mo",
+    interval: els.interval ? els.interval.value : "1d",
+  };
+}
+
+function applySelection(selection) {
+  if (!selection) return;
+  if (els.symbol && selection.symbol !== undefined) {
+    els.symbol.value = selection.symbol;
+  }
+  if (els.exchange && selection.exchange) els.exchange.value = selection.exchange;
+  if (els.period && selection.period) els.period.value = selection.period;
+  if (els.interval && selection.interval) els.interval.value = selection.interval;
+}
+
+function syncUrl(selection) {
+  try {
+    const params = new URLSearchParams({
+      symbol: selection.symbol,
+      exchange: selection.exchange,
+      period: selection.period,
+      interval: selection.interval,
+    });
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}?${params.toString()}`
+    );
+  } catch (error) {
+    /* file:// and embedded browsers may reject history updates. */
+  }
+}
+
+function restoreFromUrl() {
+  if (!CU) return;
+  const params = new URLSearchParams(window.location.search);
+  const selection = CU.selectionFromParams(params, {
+    exchange: "NSE",
+    period: "3mo",
+    interval: "1d",
+  });
+
+  applySelection(selection);
+
+  if (selection.symbol) {
+    if (selection.notes && selection.notes.length) {
+      showSelectionNote(selection.notes.join(" "));
+    }
+    setStatus(
+      "info",
+      `Loaded ${selection.symbol} from the link. Click Stock Analysis to run it.`
+    );
+  }
+}
+
+/* ==========================================================================
+   Autocomplete — real NIFTY 50 constituents, manual entry always allowed
+   ========================================================================== */
+
+const stockUniverse = {
+  items: null,
+  promise: null,
+};
+
+let suggestionTimer = null;
+
+function ensureStockUniverse() {
+  if (stockUniverse.items) return Promise.resolve(stockUniverse.items);
+  if (stockUniverse.promise) return stockUniverse.promise;
+
+  const url = `${API_ROOT}/api/indices/${encodeURIComponent(
+    "NIFTY 50"
+  )}/constituents`;
+
+  stockUniverse.promise = fetch(url, { headers: { Accept: "application/json" } })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((payload) => {
+      const list = Array.isArray(payload && payload.constituents)
+        ? payload.constituents
+        : [];
+      const items = list
+        .map((item) => ({
+          symbol: String(item.symbol || "").trim().toUpperCase(),
+          name: String(item.name || "").trim(),
+        }))
+        .filter((item) => /^[A-Z0-9.^-]{1,30}$/.test(item.symbol));
+      stockUniverse.items = items;
+      return items;
+    })
+    .catch((error) => {
+      console.warn("Autocomplete universe unavailable:", error);
+      stockUniverse.items = [];
+      return [];
+    })
+    .finally(() => {
+      stockUniverse.promise = null;
+    });
+
+  return stockUniverse.promise;
+}
+
+function closeSuggestions() {
+  state.activeSuggestion = -1;
+  if (suggestionTimer !== null) {
+    window.clearTimeout(suggestionTimer);
+    suggestionTimer = null;
+  }
+  if (!els.suggestions) return;
+  els.suggestions.innerHTML = "";
+  els.suggestions.style.display = "none";
+  if (els.symbol) els.symbol.setAttribute("aria-expanded", "false");
+}
+
+function suggestionMessage(message) {
+  if (!els.suggestions) return;
+  els.suggestions.innerHTML = `<p class="suggestion-empty">${escapeHtml(
+    message
+  )}</p>`;
+  els.suggestions.style.display = "block";
+  if (els.symbol) els.symbol.setAttribute("aria-expanded", "true");
+}
+
+function renderSuggestionMatches(value) {
+  if (!els.suggestions) return;
+
+  const query = value.trim().toUpperCase();
+  if (!query) {
+    closeSuggestions();
+    return;
+  }
+
+  const items = stockUniverse.items || [];
+  if (!items.length) {
+    suggestionMessage(
+      "Autocomplete is unavailable right now. Type the exact NSE symbol (for example RELIANCE) and click Stock Analysis."
+    );
+    return;
+  }
+
+  const starts = [];
+  const contains = [];
+  items.forEach((item) => {
+    const symbol = item.symbol;
+    const name = item.name.toUpperCase();
+    if (symbol === query || symbol.startsWith(query)) starts.push(item);
+    else if (name.includes(query) || symbol.includes(query)) contains.push(item);
+  });
+
+  const matches = [...starts, ...contains].slice(0, 8);
+  if (!matches.length) {
+    suggestionMessage(
+      "No NIFTY 50 match. You can still type an exact NSE/BSE symbol and run the analysis."
+    );
+    return;
+  }
+
+  state.activeSuggestion = -1;
+  els.suggestions.innerHTML = matches
+    .map((item, index) => {
+      const displayName =
+        typeof displayConstituentName === "function"
+          ? displayConstituentName(item)
+          : item.name;
+      const nameHtml =
+        displayName && displayName !== "NSE"
+          ? `<span class=\"suggestion-name\">${escapeHtml(displayName)}</span>`
+          : "";
+      return `
+        <button type=\"button\" class=\"suggestion-item\" role=\"option\"
+          data-symbol=\"${escapeAttr(item.symbol)}\" data-index=\"${index}\"
+          aria-selected=\"false\">
+          <span class=\"suggestion-symbol\">${escapeHtml(item.symbol)}</span>
+          ${nameHtml}
+        </button>
+      `;
+    })
+    .join("");
+
+  els.suggestions.style.display = "block";
+  if (els.symbol) els.symbol.setAttribute("aria-expanded", "true");
+
+  els.suggestions.querySelectorAll(".suggestion-item").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectSuggestion(button.getAttribute("data-symbol"));
+    });
   });
 }
 
-function showResults() {
-  ["metaPanel", "chartPanel", "indicatorPanel", "anomalyPanel"].forEach((id) => {
-    const panel = document.getElementById(id);
-    if (panel) panel.classList.remove("hidden");
+function selectSuggestion(symbol) {
+  if (!symbol || !els.symbol) return;
+  els.symbol.value = symbol;
+  closeSuggestions();
+  hideSelectionNote();
+  if (els.analyzeBtn) els.analyzeBtn.focus();
+}
+
+function updateSuggestions(value) {
+  if (stockUniverse.items) {
+    renderSuggestionMatches(value);
+    return;
+  }
+
+  suggestionMessage("Loading real NIFTY 50 stock names…");
+  ensureStockUniverse().then(() => {
+    if (!els.symbol || els.symbol.value.trim() !== value) return;
+    renderSuggestionMatches(value);
   });
 }
 
-// ---------- Chart lifecycle ----------
+function handleSymbolInput() {
+  const value = els.symbol ? els.symbol.value : "";
+  window.clearTimeout(suggestionTimer);
 
+  if (!value.trim()) {
+    closeSuggestions();
+    return;
+  }
+
+  suggestionTimer = window.setTimeout(() => updateSuggestions(value), 220);
+}
+
+function moveSuggestion(direction) {
+  if (!els.suggestions) return;
+  const items = Array.from(
+    els.suggestions.querySelectorAll(".suggestion-item")
+  );
+  if (!items.length) return;
+
+  state.activeSuggestion += direction;
+  if (state.activeSuggestion < 0) state.activeSuggestion = items.length - 1;
+  if (state.activeSuggestion >= items.length) state.activeSuggestion = 0;
+
+  items.forEach((item, index) => {
+    item.setAttribute(
+      "aria-selected",
+      String(index === state.activeSuggestion)
+    );
+    if (index === state.activeSuggestion) {
+      item.scrollIntoView({ block: "nearest" });
+    }
+  });
+}
+
+/* ==========================================================================
+   Chart lifecycle
+   ========================================================================== */
 
 function chartingAvailable() {
   return Boolean(
-    typeof window !== "undefined" &&
-      window.LightweightCharts &&
+    window.LightweightCharts &&
       typeof window.LightweightCharts.createChart === "function"
   );
 }
 
-function destroyChart() {
-  if (state.resizeObserver) {
-    try {
-      state.resizeObserver.disconnect();
-    } catch (error) {
-      // Ignore a browser that removed the observer already.
-    }
-    state.resizeObserver = null;
-  }
-
-  state.priceLines = [];
-  state.markers = [];
-  state.markerResult = null;
-  state.mapped = null;
-  state.lastData = null;
-
-  if (state.chart) {
-    try {
-      state.chart.remove();
-    } catch (error) {
-      // The chart may already have been removed by the library.
-    }
-    state.chart = null;
-  }
-  state.candleSeries = null;
-  state.lineSeries = null;
-  state.volumeSeries = null;
-
-  if (els.priceChart) els.priceChart.innerHTML = "";
-  if (els.chartLegend) {
-    els.chartLegend.innerHTML =
-      '<span class="legend-hint">Hover the chart for OHLCV details.</span>';
-  }
-  if (els.chartNote) els.chartNote.textContent = "";
-  if (els.anomalyLegend) {
-    els.anomalyLegend.innerHTML = "";
-    els.anomalyLegend.classList.add("hidden");
-  }
-  if (els.volumeToggle) els.volumeToggle.disabled = false;
+function chartPalette() {
+  const light = document.documentElement.dataset.theme === "light";
+  return light
+    ? {
+        background: "#ffffff",
+        text: "#334155",
+        grid: "rgba(15, 23, 42, 0.08)",
+        border: "rgba(15, 23, 42, 0.18)",
+        crosshair: "#475569",
+        crosshairLabel: "#334155",
+        volumeUp: "rgba(21, 128, 61, 0.40)",
+        volumeDown: "rgba(185, 28, 28, 0.38)",
+      }
+    : {
+        background: "#0b1422",
+        text: "#cbd5e1",
+        grid: "rgba(148, 163, 184, 0.12)",
+        border: "rgba(148, 163, 184, 0.28)",
+        crosshair: "#94a3b8",
+        crosshairLabel: "#1e293b",
+        volumeUp: "rgba(34, 197, 94, 0.42)",
+        volumeDown: "rgba(248, 113, 113, 0.40)",
+      };
 }
-
-function clearResults() {
-  destroyChart();
-  if (els.metaList) els.metaList.innerHTML = "";
-  if (els.metaBadge) {
-    els.metaBadge.textContent = "";
-    els.metaBadge.className = "meta-badge";
-  }
-  if (els.indicatorGrid) els.indicatorGrid.innerHTML = "";
-  if (els.anomalyGrid) els.anomalyGrid.innerHTML = "";
-  hideResults();
-}
-
-// Invalid input must also invalidate any request already in flight, otherwise
-// its late response could repaint results for the discarded symbol.
-function cancelActiveRequest() {
-  if (state.guard) state.guard.invalidate();
-  if (els.analyzeBtn) els.analyzeBtn.disabled = false;
-}// ---------- Request ordering ----------
-class RequestGuard {
-  constructor() {
-    this.sequence = 0;
-    this.controller = null;
-  }
-
-  begin() {
-    this.invalidate();
-    const id = this.sequence;
-    const controller = new AbortController();
-    this.controller = controller;
-    return {
-      id,
-      signal: controller.signal,
-      isCurrent: () => this.isCurrent(id),
-    };
-  }
-
-  isCurrent(id) {
-    return id === this.sequence;
-  }
-
-  invalidate() {
-    this.cancel();
-    this.sequence += 1;
-  }
-
-  cancel() {
-    if (this.controller) {
-      this.controller.abort();
-      this.controller = null;
-    }
-  }
-}
-
 
 function formatCrosshairTime(time) {
   if (typeof time === "number") {
@@ -466,7 +581,10 @@ function formatCrosshairTime(time) {
   if (CU) {
     const seconds = CU.parseTimestamp(time);
     if (seconds !== null) {
-      return CU.formatTime(new Date(seconds * 1000).toISOString(), state.interval);
+      return CU.formatTime(
+        new Date(seconds * 1000).toISOString(),
+        state.interval
+      );
     }
   }
   return String(time);
@@ -477,32 +595,44 @@ function ensureChart() {
   if (!chartingAvailable() || !els.priceChart) return null;
 
   const width = Math.max(320, els.priceChart.clientWidth || 800);
-  const height = Math.max(280, els.priceChart.clientHeight || 460);
+  const height = Math.max(280, els.priceChart.clientHeight || 420);
   const library = window.LightweightCharts;
+  const palette = chartPalette();
 
   const chart = library.createChart(els.priceChart, {
     width,
     height,
     layout: {
-      background: { type: library.ColorType.Solid, color: "#ffffff" },
-      textColor: "#333333",
-      fontFamily: "Arial, sans-serif",
+      background: { type: library.ColorType.Solid, color: palette.background },
+      textColor: palette.text,
+      fontFamily: "Inter, Segoe UI, sans-serif",
+      fontSize: 12,
     },
     grid: {
-      vertLines: { color: "#f2f2f2" },
-      horzLines: { color: "#f2f2f2" },
+      vertLines: { color: palette.grid },
+      horzLines: { color: palette.grid },
     },
     crosshair: {
       mode: library.CrosshairMode.Normal,
-      vertLine: { color: "#90a4ae", width: 1, style: 3, labelBackgroundColor: "#37474f" },
-      horzLine: { color: "#90a4ae", width: 1, style: 3, labelBackgroundColor: "#37474f" },
+      vertLine: {
+        color: palette.crosshair,
+        width: 1,
+        style: 3,
+        labelBackgroundColor: palette.crosshairLabel,
+      },
+      horzLine: {
+        color: palette.crosshair,
+        width: 1,
+        style: 3,
+        labelBackgroundColor: palette.crosshairLabel,
+      },
     },
     rightPriceScale: {
-      borderColor: "#dddddd",
-      scaleMargins: { top: 0.08, bottom: 0.28 },
+      borderColor: palette.border,
+      scaleMargins: { top: 0.13, bottom: 0.30 },
     },
     timeScale: {
-      borderColor: "#dddddd",
+      borderColor: palette.border,
       timeVisible: CU ? CU.isIntraday(state.interval) : false,
       secondsVisible: false,
       rightOffset: 4,
@@ -523,24 +653,25 @@ function ensureChart() {
       pinch: true,
     },
     localization: {
-      priceFormatter: (price) => (CU ? CU.formatPrice(price, 2) : String(price)),
+      priceFormatter: (price) =>
+        CU ? CU.formatPrice(price, 2) : String(price),
       timeFormatter: formatCrosshairTime,
     },
   });
 
   const candleSeries = chart.addCandlestickSeries({
-    upColor: "#089981",
-    downColor: "#f23645",
-    borderUpColor: "#089981",
-    borderDownColor: "#f23645",
-    wickUpColor: "#089981",
-    wickDownColor: "#f23645",
+    upColor: "#22c55e",
+    downColor: "#f87171",
+    borderUpColor: "#22c55e",
+    borderDownColor: "#f87171",
+    wickUpColor: "#22c55e",
+    wickDownColor: "#f87171",
     priceLineVisible: true,
     lastValueVisible: true,
   });
 
   const lineSeries = chart.addLineSeries({
-    color: "#2962ff",
+    color: "#38bdf8",
     lineWidth: 2,
     visible: false,
     priceLineVisible: true,
@@ -560,6 +691,7 @@ function ensureChart() {
   });
 
   chart.subscribeCrosshairMove(handleCrosshairMove);
+  chart.subscribeClick(handleChartClick);
 
   if (typeof ResizeObserver !== "undefined") {
     state.resizeObserver = new ResizeObserver(() => {
@@ -579,17 +711,290 @@ function ensureChart() {
   return chart;
 }
 
+function destroyChart() {
+  if (state.resizeObserver) {
+    try {
+      state.resizeObserver.disconnect();
+    } catch (error) {
+      /* already disconnected */
+    }
+    state.resizeObserver = null;
+  }
+
+  state.priceLines = [];
+  state.markers = [];
+  state.markerResult = null;
+  state.mapped = null;
+  state.lastData = null;
+  state.hoveredAnomalyTime = null;
+  state.pinnedAnomalyTime = null;
+  state.markerPointer = null;
+  hideMarkerTooltip();
+
+  if (state.chart) {
+    try {
+      state.chart.remove();
+    } catch (error) {
+      /* library already removed it */
+    }
+    state.chart = null;
+  }
+
+  state.candleSeries = null;
+  state.lineSeries = null;
+  state.volumeSeries = null;
+
+  if (els.priceChart) els.priceChart.innerHTML = "";
+  if (els.chartLegend) {
+    els.chartLegend.innerHTML =
+      '<span class="legend-hint">Hover the chart for OHLCV details.</span>';
+  }
+  if (els.chartNote) els.chartNote.textContent = "";
+  if (els.anomalyLegend) {
+    els.anomalyLegend.innerHTML = "";
+    els.anomalyLegend.classList.add("hidden");
+  }
+  if (els.volumeToggle) els.volumeToggle.disabled = false;
+}
+
+function updateChartTheme() {
+  if (!state.chart || !window.LightweightCharts) return;
+  const library = window.LightweightCharts;
+  const palette = chartPalette();
+
+  state.chart.applyOptions({
+    layout: {
+      background: { type: library.ColorType.Solid, color: palette.background },
+      textColor: palette.text,
+    },
+    grid: {
+      vertLines: { color: palette.grid },
+      horzLines: { color: palette.grid },
+    },
+    crosshair: {
+      vertLine: {
+        color: palette.crosshair,
+        labelBackgroundColor: palette.crosshairLabel,
+      },
+      horzLine: {
+        color: palette.crosshair,
+        labelBackgroundColor: palette.crosshairLabel,
+      },
+    },
+    rightPriceScale: { borderColor: palette.border },
+    timeScale: { borderColor: palette.border },
+  });
+}
+
+const MARKER_VALUE_LABELS = {
+  latest_volume: "Volume",
+  baseline_average: "Baseline average",
+  percent_above_baseline: "Above baseline",
+  recent_atr: "Recent ATR",
+  baseline_atr: "Baseline ATR",
+  percent_change: "Change vs baseline",
+  price_change_percent: "Price change",
+  volume_change_percent: "Volume change",
+  price_return_pct: "Price return",
+  volume_change_pct: "Volume change",
+  true_range_pct: "True Range",
+};
+
+function markerValueHtml(key, value) {
+  const number = CU ? CU.finiteNumber(value) : null;
+  if (number === null) return "";
+  let formatted;
+  if (key === "latest_volume" || key === "baseline_average") {
+    formatted = fmtVolume(number);
+  } else if (key.includes("percent")) {
+    formatted = `${fmtSignedValue(number)}%`;
+  } else {
+    formatted = fmtValue(number, 4);
+  }
+  const label = MARKER_VALUE_LABELS[key] || key.replace(/_/g, " ");
+  return `<span class="marker-value"><span>${escapeHtml(
+    label
+  )}</span><strong>${escapeHtml(formatted)}</strong></span>`;
+}
+
+function markerTooltipHtml(cluster) {
+  if (!cluster || !Array.isArray(cluster.points) || !cluster.points.length) {
+    return "";
+  }
+
+  const points = cluster.points
+    .map((point) => {
+      const metrics = [];
+      if (point.score !== null) {
+        metrics.push(
+          `<span><span>${escapeHtml(
+            point.scoreLabel || "Score"
+          )}</span><strong>${escapeHtml(fmtValue(point.score, 4))}</strong></span>`
+        );
+      }
+      if (point.threshold !== null) {
+        metrics.push(
+          `<span><span>Threshold</span><strong>${escapeHtml(
+            fmtValue(point.threshold, 4)
+          )}</strong></span>`
+        );
+      }
+      if (point.signal) {
+        metrics.push(
+          `<span><span>Signal</span><strong>${escapeHtml(
+            point.signal
+          )}</strong></span>`
+        );
+      }
+      const values = Object.entries(point.values || {})
+        .map(([key, value]) => markerValueHtml(key, value))
+        .join("");
+      const sourceLabel =
+        point.source === "latest" ? "Latest complete bar" : "Historical";
+      return `<section class="marker-detail">
+        <header>
+          <span class="marker-dot" aria-hidden="true"></span>
+          <strong>${escapeHtml(point.detectorName)}</strong>
+          <span class="marker-scope-pill ${point.source}">${sourceLabel}</span>
+        </header>
+        ${
+          metrics.length
+            ? `<div class="marker-metrics">${metrics.join("")}</div>`
+            : ""
+        }
+        ${values ? `<div class="marker-values">${values}</div>` : ""}
+        ${
+          point.explanation
+            ? `<p class="marker-explanation">${escapeHtml(
+                point.explanation
+              )}</p>`
+            : ""
+        }
+      </section>`;
+    })
+    .join("");
+
+  return `
+    <div class="marker-tooltip-head">
+      <span class="marker-kicker">Anomaly marker</span>
+      <strong>${escapeHtml(fmtTime(cluster.barTimestamp))}</strong>
+      <span>Close ${escapeHtml(fmtValue(cluster.price))}</span>
+    </div>
+    <div class="marker-tooltip-list">${points}</div>
+    <p class="marker-tooltip-note">
+      ${cluster.points.length > 1
+        ? `${cluster.points.length} detectors flagged this candle. `
+        : ""}Click the candle to pin these details; click again to release.
+    </p>
+  `;
+}
+
+function positionMarkerTooltip(cluster, point) {
+  if (!els.markerTooltip || !els.chartCanvasWrap) return;
+  const width = els.chartCanvasWrap.clientWidth;
+  const height = els.chartCanvasWrap.clientHeight;
+  const chartHeight =
+    els.priceChart && els.priceChart.clientHeight
+      ? els.priceChart.clientHeight
+      : height;
+  const tooltipWidth = Math.min(380, Math.max(240, width - 24));
+  els.markerTooltip.style.width = `${tooltipWidth}px`;
+  els.markerTooltip.style.maxHeight = `${Math.max(
+    160,
+    Math.min(height, chartHeight) - 24
+  )}px`;
+
+  let left = (point && Number.isFinite(point.x) ? point.x : width - 40) + 16;
+  if (left + tooltipWidth > width - 8) {
+    left = (point ? point.x : width) - tooltipWidth - 16;
+  }
+  left = Math.max(8, Math.min(left, Math.max(8, width - tooltipWidth - 8)));
+
+  let top = (point && Number.isFinite(point.y) ? point.y : 40) - 16;
+  const tooltipHeight = els.markerTooltip.offsetHeight || 0;
+  top = Math.max(8, Math.min(top, Math.max(8, height - tooltipHeight - 8)));
+  els.markerTooltip.style.left = `${left}px`;
+  els.markerTooltip.style.top = `${top}px`;
+}
+
+function showMarkerTooltip(cluster, point) {
+  if (!els.markerTooltip || !cluster) return;
+  els.markerTooltip.innerHTML = markerTooltipHtml(cluster);
+  els.markerTooltip.classList.remove("hidden");
+  els.markerTooltip.classList.toggle(
+    "pinned",
+    state.pinnedAnomalyTime === cluster.time
+  );
+  positionMarkerTooltip(cluster, point);
+}
+
+function hideMarkerTooltip() {
+  if (!els.markerTooltip) return;
+  els.markerTooltip.classList.add("hidden");
+  els.markerTooltip.innerHTML = "";
+  els.markerTooltip.classList.remove("pinned");
+}
+
 function handleCrosshairMove(param) {
   if (!state.chart || !state.mapped) return;
   const latest = state.mapped.bars.length
     ? state.mapped.bars[state.mapped.bars.length - 1]
     : null;
+
   if (!param || !param.time || !param.point) {
     renderChartLegend(latest);
+    if (state.pinnedAnomalyTime !== null) {
+      const pinned = CU
+        ? CU.markerClusterAtTime(state.markerResult, state.pinnedAnomalyTime)
+        : null;
+      if (pinned) showMarkerTooltip(pinned, state.markerPointer);
+    } else {
+      hideMarkerTooltip();
+    }
     return;
   }
+
   const bar = CU ? CU.barAtTimestamp(state.mapped.bars, param.time) : null;
   renderChartLegend(bar || latest);
+
+  const cluster = CU
+    ? CU.markerClusterAtTime(state.markerResult, param.time)
+    : null;
+  if (cluster) {
+    state.hoveredAnomalyTime = cluster.time;
+    showMarkerTooltip(cluster, param.point);
+  } else if (state.pinnedAnomalyTime !== null) {
+    const pinned = CU
+      ? CU.markerClusterAtTime(state.markerResult, state.pinnedAnomalyTime)
+      : null;
+    if (pinned) showMarkerTooltip(pinned, state.markerPointer);
+    else hideMarkerTooltip();
+  } else {
+    state.hoveredAnomalyTime = null;
+    hideMarkerTooltip();
+  }
+}
+
+function handleChartClick(param) {
+  if (!CU || !param || param.time === undefined || param.time === null) return;
+  const cluster = CU.markerClusterAtTime(state.markerResult, param.time);
+  if (!cluster) {
+    state.pinnedAnomalyTime = null;
+    state.markerPointer = null;
+    hideMarkerTooltip();
+    return;
+  }
+
+  if (state.pinnedAnomalyTime === cluster.time) {
+    state.pinnedAnomalyTime = null;
+    state.markerPointer = null;
+    hideMarkerTooltip();
+    return;
+  }
+
+  state.pinnedAnomalyTime = cluster.time;
+  state.markerPointer = param.point || null;
+  showMarkerTooltip(cluster, param.point);
 }
 
 function renderChartLegend(bar) {
@@ -609,12 +1014,12 @@ function renderChartLegend(bar) {
 
   els.chartLegend.innerHTML = `
     <span class="legend-tag">${isLatest ? "Latest complete" : "Selected"}</span>
-    <span class="legend-date">${fmtTime(bar.timestamp)}</span>
+    <span class="legend-date">${escapeHtml(fmtTime(bar.timestamp))}</span>
     <span class="legend-item"><span class="legend-label">O</span>${fmtValue(bar.open)}</span>
     <span class="legend-item"><span class="legend-label">H</span>${fmtValue(bar.high)}</span>
     <span class="legend-item"><span class="legend-label">L</span>${fmtValue(bar.low)}</span>
     <span class="legend-item ${direction}"><span class="legend-label">C</span>${fmtValue(bar.close)}</span>
-    <span class="legend-item"><span class="legend-label">Vol</span>${escape(volume)}</span>
+    <span class="legend-item"><span class="legend-label">Vol</span>${escapeHtml(volume)}</span>
   `;
 }
 
@@ -623,7 +1028,7 @@ function removePriceLines() {
     try {
       series.removePriceLine(line);
     } catch (error) {
-      // The series may already be gone during a teardown.
+      /* series may already be gone */
     }
   });
   state.priceLines = [];
@@ -655,7 +1060,7 @@ function applyLevels(analysis) {
       color: level.color,
       lineWidth: 1,
       lineStyle: level.lineStyle,
-      axisLabelVisible: true,
+      axisLabelVisible: level.axisLabelVisible !== false,
       title: level.title,
     });
     state.priceLines.push({ series: active, line, level });
@@ -666,12 +1071,8 @@ function setMode(mode) {
   state.mode = mode === "line" ? "line" : "candles";
   const candles = state.mode === "candles";
 
-  if (state.candleSeries) {
-    state.candleSeries.applyOptions({ visible: candles });
-  }
-  if (state.lineSeries) {
-    state.lineSeries.applyOptions({ visible: !candles });
-  }
+  if (state.candleSeries) state.candleSeries.applyOptions({ visible: candles });
+  if (state.lineSeries) state.lineSeries.applyOptions({ visible: !candles });
 
   if (els.modeCandles) {
     els.modeCandles.classList.toggle("active", candles);
@@ -696,8 +1097,8 @@ function setVolumeVisible(visible) {
   if (state.chart) {
     state.chart.priceScale("right").applyOptions({
       scaleMargins: {
-        top: 0.08,
-        bottom: state.showVolume ? 0.28 : 0.08,
+        top: 0.13,
+        bottom: state.showVolume ? 0.30 : 0.10,
       },
     });
   }
@@ -707,7 +1108,9 @@ function resetZoom() {
   if (state.chart) state.chart.timeScale().fitContent();
 }
 
-// ---------- Chart note and anomaly legend ----------
+/* ==========================================================================
+   Chart note and anomaly legend
+   ========================================================================== */
 
 function renderChartNote(mapped, data, hasVolume) {
   if (!els.chartNote || !CU) return;
@@ -756,7 +1159,7 @@ function renderChartNote(mapped, data, hasVolume) {
     );
   }
 
-  const levels = CU ? CU.buildIndicatorLevels(analysis) : [];
+  const levels = CU.buildIndicatorLevels(analysis);
   if (state.showLevels && levels.length) {
     notes.push(
       "Dashed lines are the latest SMA/EMA values; dotted lines are " +
@@ -774,40 +1177,61 @@ function renderChartNote(mapped, data, hasVolume) {
   els.chartNote.textContent = notes.join(" ");
 }
 
-function anomalyStatusLabel(status) {
-  if (status === "flagged") return "Flagged";
-  if (status === "clear") return "No anomaly";
-  if (status === "unplaced") return "Flagged, not placed";
+function anomalyStatusLabel(entry) {
+  if (entry.status === "flagged") {
+    return entry.scope === "latest_only" ? "Latest flag" : "Marked";
+  }
+  if (entry.status === "clear") return "No flag";
+  if (entry.status === "unplaced") return "Not placeable";
   return "Unavailable";
 }
 
+function anomalyScopeLabel(entry) {
+  if (entry.historicalAvailable) return "Historical + latest";
+  if (entry.latestOnly || !entry.hasHistoricalEnvelope) return "Latest bar only";
+  return "Historical unavailable";
+}
+
 function anomalyDetail(entry, interval) {
-  if (entry.status === "flagged") {
-    const parts = [];
-    if (entry.score !== null) {
-      parts.push(`${entry.scoreLabel} ${fmtValue(entry.score, 4)}`);
+  const parts = [];
+
+  if (entry.scope === "latest_only") {
+    parts.push("latest complete bar only");
+  } else if (entry.historicalAvailable) {
+    const count = Number(entry.historicalPoints) || 0;
+    const detected =
+      entry.detectedBars === null || entry.detectedBars === undefined
+        ? null
+        : Number(entry.detectedBars);
+    if (detected !== null && detected !== count) {
+      parts.push(`${count} historical run(s) of ${detected} signal bar(s)`);
+    } else {
+      parts.push(`${count} historical marker(s)`);
     }
-    if (entry.threshold !== null) {
-      parts.push(`threshold ${fmtValue(entry.threshold, 4)}`);
-    }
-    if (entry.price !== null) {
-      parts.push(`close ${fmtValue(entry.price)}`);
-    }
-    if (entry.barTimestamp) {
-      parts.push(fmtTime(entry.barTimestamp, interval));
-    }
-    return parts.join(" · ");
+    if (entry.latestFlag) parts.push("latest bar also flagged");
   }
-  if (entry.status === "clear") {
-    return (
-      `${entry.scoreLabel} ${fmtValue(entry.score, 4)} vs threshold ` +
-      `${fmtValue(entry.threshold, 4)} · no flag`
+
+  if (entry.score !== null) {
+    const prefix = entry.historicalAvailable ? "latest " : "";
+    parts.push(
+      `${prefix}${entry.scoreLabel || "score"} ${fmtValue(entry.score, 4)}`
     );
   }
-  if (entry.status === "unavailable") {
-    return "Unavailable";
+  if (entry.threshold !== null) {
+    const prefix = entry.historicalAvailable ? "latest " : "";
+    parts.push(`${prefix}threshold ${fmtValue(entry.threshold, 4)}`);
   }
-  return "Flagged but not placed on a returned bar";
+  if (entry.barTimestamp) {
+    parts.push(`last marked ${fmtTime(entry.barTimestamp, interval)}`);
+  }
+  if (!parts.length) {
+    if (entry.status === "unavailable") return entry.reason || "Unavailable";
+    if (entry.status === "clear") return "No anomaly on the latest bar.";
+    if (entry.status === "unplaced") {
+      return "A flag was returned, but its timestamp did not match a drawn bar.";
+    }
+  }
+  return parts.join(" · ");
 }
 
 function renderAnomalyLegend(result, interval) {
@@ -819,17 +1243,21 @@ function renderAnomalyLegend(result, interval) {
   }
 
   const entries = result.entries;
-  const flaggedCount = entries.filter((entry) => entry.status === "flagged").length;
-  const unavailableCount = entries.filter(
-    (entry) => entry.status === "unavailable"
-  ).length;
+  const flaggedCount = Number(result.markedCandles) || 0;
+  const pointCount = Number(result.pointCount) || 0;
+  const latestOnlyNames = entries
+    .filter((entry) => entry.scope === "latest_only" || entry.latestOnly)
+    .map((entry) => entry.name);
 
   const head = `
     <div class="anomaly-legend-head">
-      <strong>Latest complete bar checks</strong>
-      <span>${flaggedCount} of ${entries.length} flagged${
-        unavailableCount ? ` · ${unavailableCount} unavailable` : ""
-      }</span>
+      <div>
+        <span class="eyebrow">Anomaly markers</span>
+        <strong>${flaggedCount} marked candle${flaggedCount === 1 ? "" : "s"}</strong>
+      </div>
+      <span>${pointCount} placed detector point${
+        pointCount === 1 ? "" : "s"
+      } · one red circle per candle</span>
     </div>
   `;
 
@@ -838,35 +1266,72 @@ function renderAnomalyLegend(result, interval) {
       const detail = anomalyDetail(entry, interval);
       const reason = entry.reason || "No explanation was returned.";
       return `
-        <li class="anomaly-legend-item ${entry.status}" title="${escapeAttr(reason)}">
-          <span class="anomaly-swatch" style="background:${entry.color}">${escape(entry.short)}</span>
-          <span class="anomaly-legend-name">${escape(entry.name)}</span>
-          <span class="anomaly-legend-status">${escape(anomalyStatusLabel(entry.status))}</span>
-          <span class="anomaly-legend-detail">${escape(detail)}</span>
+        <li class="anomaly-legend-item ${entry.status}" title="${escapeAttr(
+          reason
+        )}">
+          <span class="anomaly-swatch marker-swatch" aria-hidden="true">${escapeHtml(
+            entry.short
+          )}</span>
+          <span class="anomaly-legend-name">${escapeHtml(entry.name)}</span>
+          <span class="anomaly-legend-scope">${escapeHtml(
+            anomalyScopeLabel(entry)
+          )}</span>
+          <span class="anomaly-legend-status">${escapeHtml(
+            anomalyStatusLabel(entry)
+          )}</span>
+          <span class="anomaly-legend-detail">${escapeHtml(detail)}</span>
         </li>
       `;
     })
     .join("");
 
   const warnings = (result.issues || [])
-    .map((issue) => `<p class="anomaly-warning">${escape(issue)}</p>`)
+    .map((issue) => `<p class="anomaly-warning">${escapeHtml(issue)}</p>`)
     .join("");
+
+  const limitations = (result.limitations || [])
+    .slice(0, 7)
+    .map(
+      (item) => `<li>${escapeHtml(item)}</li>`
+    )
+    .join("");
+
+  const latestOnlyNote = latestOnlyNames.length
+    ? `<p class="anomaly-legend-note"><strong>Latest-only:</strong> ${escapeHtml(
+        latestOnlyNames.join(", ")
+      )} have no historical series, so no historical marker is drawn for them. A latest flag still appears at the latest evaluated candle when the detector returns one.</p>`
+    : "";
 
   els.anomalyLegend.innerHTML = `
     ${head}
+    <div class="anomaly-overlay-legend" aria-label="Chart symbol legend">
+      <span><i class="overlay-swatch anomaly"></i>Red circle: anomaly marker</span>
+      <span><i class="overlay-swatch sma"></i>Dashed blue: latest SMA</span>
+      <span><i class="overlay-swatch ema"></i>Dashed teal: latest EMA</span>
+      <span><i class="overlay-swatch fib"></i>Dotted grey: Fibonacci</span>
+    </div>
     <ul class="anomaly-legend-list">${items}</ul>
+    ${result.labelsSuppressed ? `<p class="anomaly-legend-note">Many candles are marked, so marker text labels are hidden to keep the chart readable. Every red circle still opens its full detector details.</p>` : ""}
+    ${latestOnlyNote}
+    ${
+      limitations
+        ? `<details class="anomaly-limitations"><summary>Historical method & limitations</summary><ul>${limitations}</ul></details>`
+        : ""
+    }
     ${warnings}
     <p class="anomaly-legend-note">
-      Markers are placed on the evaluated bar; the legend shows that bar's close
-      price. Historical anomaly timelines are not shown because the backend
-      returns only latest-bar scores. A statistical anomaly is not proof of
-      manipulation.
+      Hover or click a marked candle to see detector names, timestamp, returned
+      values, available scores/thresholds and explanations. The legend lists the
+      most recent placed point per detector. A statistical anomaly is not proof
+      of manipulation, a prediction, or investment advice.
     </p>
   `;
   els.anomalyLegend.classList.remove("hidden");
 }
 
-// ---------- Chart rendering ----------
+/* ==========================================================================
+   Chart rendering
+   ========================================================================== */
 
 function renderChart(data, mapped) {
   destroyChart();
@@ -875,7 +1340,11 @@ function renderChart(data, mapped) {
   state.lastData = data;
 
   const markerResult = CU
-    ? CU.buildAnomalyMarkers(data.analysis, mapped.bars)
+    ? CU.buildAnomalyMarkers(
+        data.analysis,
+        mapped.bars,
+        data.historical_anomalies
+      )
     : null;
   state.markerResult = markerResult;
 
@@ -934,15 +1403,13 @@ function renderChart(data, mapped) {
     mapped.bars.map((bar) => ({ time: bar.time, value: bar.close }))
   );
 
+  const palette = chartPalette();
   const volumeData = mapped.bars
     .filter((bar) => bar.volume !== null)
     .map((bar) => ({
       time: bar.time,
       value: bar.volume,
-      color:
-        bar.close >= bar.open
-          ? "rgba(8, 153, 129, 0.45)"
-          : "rgba(242, 54, 69, 0.45)",
+      color: bar.close >= bar.open ? palette.volumeUp : palette.volumeDown,
     }));
   state.volumeSeries.setData(volumeData);
 
@@ -953,8 +1420,8 @@ function renderChart(data, mapped) {
   state.volumeSeries.applyOptions({ visible: state.showVolume });
   chart.priceScale("right").applyOptions({
     scaleMargins: {
-      top: 0.08,
-      bottom: state.showVolume ? 0.28 : 0.08,
+      top: 0.13,
+      bottom: state.showVolume ? 0.30 : 0.10,
     },
   });
 
@@ -966,7 +1433,9 @@ function renderChart(data, mapped) {
   renderAnomalyLegend(markerResult, state.interval);
 }
 
-// ---------- Data source panel ----------
+/* ==========================================================================
+   Data source panel
+   ========================================================================== */
 
 function renderMeta(data, mapped, selection) {
   if (!els.metaList) return;
@@ -984,7 +1453,12 @@ function renderMeta(data, mapped, selection) {
     .reduce((max, value) => Math.max(max, value), 0);
 
   const rows = [
-    ["Symbol", `${data.symbol || "—"}${data.providerSymbol ? ` (${data.providerSymbol})` : ""}`],
+    [
+      "Symbol",
+      `${data.symbol || "—"}${
+        data.providerSymbol ? ` (${data.providerSymbol})` : ""
+      }`,
+    ],
     ["Exchange", data.exchange || selection.exchange],
     ["Requested period", CU.periodLabel(selection.period)],
     ["Requested interval", CU.intervalLabel(selection.interval)],
@@ -993,16 +1467,19 @@ function renderMeta(data, mapped, selection) {
     ["Bars not drawn", String(omitted)],
     ["Latest complete close", latest ? fmtValue(latest.close) : "—"],
     ["Latest complete bar", latest ? fmtTime(latest.timestamp) : "—"],
-    ["Last raw bar timestamp", data.lastDataTimestamp ? fmtTime(data.lastDataTimestamp) : "—"],
+    [
+      "Last raw bar timestamp",
+      data.lastDataTimestamp ? fmtTime(data.lastDataTimestamp) : "—",
+    ],
     ["Anomaly trailing bars excluded", String(excluded)],
-    ["Source", data.source || "—"],
+    ["Source", data.source || "Yahoo Finance via the backend"],
     ["Fetched at", fmtDateTime(data.fetchedAt)],
   ];
 
   els.metaList.innerHTML = rows
     .map(
       ([label, value]) =>
-        `<div><dt>${escape(label)}</dt><dd>${escape(value)}</dd></div>`
+        `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`
     )
     .join("");
 
@@ -1020,10 +1497,14 @@ function renderMeta(data, mapped, selection) {
   }
 }
 
-// ---------- Analysis cards ----------
+/* ==========================================================================
+   Analysis card components
+   ========================================================================== */
 
 function badge(textValue, className) {
-  return `<span class="badge ${className || ""}">${escape(textValue)}</span>`;
+  return `<span class="badge ${className || ""}">${escapeHtml(
+    textValue
+  )}</span>`;
 }
 
 function card(title, status, bodyHtml, badgeText, badgeClass) {
@@ -1031,8 +1512,7 @@ function card(title, status, bodyHtml, badgeText, badgeClass) {
   if (status === "unavailable") classes.push("is-unavailable");
   if (status === "flagged") classes.push("is-flagged");
 
-  const fallbackBadge =
-    status === "unavailable" ? "Unavailable" : "Available";
+  const fallbackBadge = status === "unavailable" ? "Unavailable" : "Available";
   const fallbackClass =
     status === "unavailable"
       ? "unavailable"
@@ -1041,7 +1521,7 @@ function card(title, status, bodyHtml, badgeText, badgeClass) {
         : "ok";
 
   return `<article class="${classes.join(" ")}">
-    <h3><span>${escape(title)}</span>${badge(
+    <h3><span>${escapeHtml(title)}</span>${badge(
       badgeText || fallbackBadge,
       badgeClass || fallbackClass
     )}</h3>
@@ -1050,13 +1530,15 @@ function card(title, status, bodyHtml, badgeText, badgeClass) {
 }
 
 function row(label, valueHtml) {
-  return `<div class="row"><span>${escape(label)}</span><span>${valueHtml}</span></div>`;
+  return `<div class="row"><span>${escapeHtml(
+    label
+  )}</span><span>${valueHtml}</span></div>`;
 }
 
 function featureList(featuresUsed) {
   if (!Array.isArray(featuresUsed) || !featuresUsed.length) return "";
   return `<p class="feature-list"><strong>Features:</strong> ${featuresUsed
-    .map((feature) => escape(feature))
+    .map((feature) => escapeHtml(feature))
     .join(", ")}</p>`;
 }
 
@@ -1070,12 +1552,12 @@ function featureTable(features, caption) {
   const rows = entries
     .map(
       ([name, value]) =>
-        `<tr><td>${escape(name)}</td><td>${fmtValue(value, 4)}</td></tr>`
+        `<tr><td>${escapeHtml(name)}</td><td>${fmtValue(value, 4)}</td></tr>`
     )
     .join("");
 
   return `<table class="feature-table">
-    <caption>${escape(caption || "Latest feature values")}</caption>
+    <caption>${escapeHtml(caption || "Latest feature values")}</caption>
     <thead><tr><th>Feature</th><th>Value</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
@@ -1098,7 +1580,7 @@ function smaCard(sma, rawBarCount, completeBarCount) {
     "SMA",
     "ok",
     `<p class="metric">${fmtValue(sma.value)}</p>
-     ${row("Period", escape(sma.period))}
+     ${row("Period", escapeHtml(String(sma.period)))}
      <p class="metric-note">Latest SMA value. The chart shows it as a dashed price line, not a historical series.</p>
      ${methodText(sma.method)}`,
     "Available",
@@ -1128,8 +1610,8 @@ function rsiCard(rsi, rawBarCount, completeBarCount) {
     "RSI",
     "ok",
     `<p class="metric">${fmtValue(value)}</p>
-     <p class="metric-note">${escape(zone)}</p>
-     ${row("Period", escape(rsi.period))}
+     <p class="metric-note">${escapeHtml(zone)}</p>
+     ${row("Period", escapeHtml(String(rsi.period)))}
      ${methodText(rsi.method)}`,
     "Available",
     "ok"
@@ -1159,7 +1641,9 @@ function fibonacciCard(fibonacci) {
       const label = Number.isFinite(percent)
         ? `${percent.toFixed(1)}%`
         : String(ratio);
-      return `<tr><td>${escape(label)}</td><td>${fmtValue(fibonacci.levels[ratio])}</td></tr>`;
+      return `<tr><td>${escapeHtml(label)}</td><td>${fmtValue(
+        fibonacci.levels[ratio]
+      )}</td></tr>`;
     })
     .join("");
 
@@ -1196,17 +1680,20 @@ function emaDeviationCard(ema) {
   }
 
   const deviation = Number(ema.deviation_percent);
-  const cssClass = deviation > 0 ? "positive" : deviation < 0 ? "negative" : "";
+  const cssClass =
+    deviation > 0 ? "positive" : deviation < 0 ? "negative" : "";
   const direction = deviation > 0 ? "above" : deviation < 0 ? "below" : "at";
 
   return card(
     "EMA deviation",
     "ok",
     `<p class="metric ${cssClass}">${fmtSignedValue(deviation)}%</p>
-     <p class="metric-note">Latest close is ${fmtValue(Math.abs(deviation))}% ${direction} the EMA. The chart shows the latest EMA as a dashed price line.</p>
+     <p class="metric-note">Latest close is ${fmtValue(
+       Math.abs(deviation)
+     )}% ${direction} the EMA. The chart shows the latest EMA as a dashed price line.</p>
      ${row("Latest close", fmtValue(ema.latest_close))}
      ${row("EMA", fmtValue(ema.ema))}
-     ${row("Period", escape(ema.period))}
+     ${row("Period", escapeHtml(String(ema.period)))}
      ${methodText(ema.method)}`,
     "Available",
     "ok"
@@ -1220,7 +1707,7 @@ function divergenceCard(divergence) {
       "unavailable",
       `<p class="explain">${
         divergence && divergence.explanation
-          ? escape(divergence.explanation)
+          ? escapeHtml(divergence.explanation)
           : "The backend could not compute a price/volume divergence for this lookback."
       }</p>`,
       "Unavailable",
@@ -1231,9 +1718,15 @@ function divergenceCard(divergence) {
   return card(
     "Volume–price divergence",
     "ok",
-    `<p class="metric signal">${escape(divergence.signal)}</p>
-     ${row("Price change", `${fmtSignedValue(divergence.price_change_percent)}%`)}
-     ${row("Volume change", `${fmtSignedValue(divergence.volume_change_percent)}%`)}
+    `<p class="metric signal">${escapeHtml(divergence.signal)}</p>
+     ${row(
+       "Price change",
+       `${fmtSignedValue(divergence.price_change_percent)}%`
+     )}
+     ${row(
+       "Volume change",
+       `${fmtSignedValue(divergence.volume_change_percent)}%`
+     )}
      ${explainText(divergence.explanation)}`,
     "Available",
     "ok"
@@ -1247,7 +1740,7 @@ function volumeSpikeCard(spike) {
       "unavailable",
       `<p class="explain">${
         spike && spike.explanation
-          ? escape(spike.explanation)
+          ? escapeHtml(spike.explanation)
           : "The backend could not compare the latest volume with a baseline."
       }</p>`,
       "Unavailable",
@@ -1261,8 +1754,11 @@ function volumeSpikeCard(spike) {
     `<p class="metric">${fmtValue(spike.volume_ratio)}×</p>
      ${row("Latest volume", fmtVolume(spike.latest_volume))}
      ${row("Baseline average", fmtVolume(spike.baseline_average))}
-     ${row("Above baseline", `${fmtSignedValue(spike.percent_above_baseline)}%`)}
-     ${row("Signal", escape(spike.signal))}
+     ${row(
+       "Above baseline",
+       `${fmtSignedValue(spike.percent_above_baseline)}%`
+     )}
+     ${row("Signal", escapeHtml(spike.signal))}
      ${explainText(spike.explanation)}`,
     "Available",
     "ok"
@@ -1276,7 +1772,7 @@ function volatilityAnomalyCard(anomaly) {
       "unavailable",
       `<p class="explain">${
         anomaly && anomaly.explanation
-          ? escape(anomaly.explanation)
+          ? escapeHtml(anomaly.explanation)
           : "The backend could not compare recent volatility with its baseline."
       }</p>`,
       "Unavailable",
@@ -1291,7 +1787,7 @@ function volatilityAnomalyCard(anomaly) {
      ${row("Recent ATR", fmtValue(anomaly.recent_atr))}
      ${row("Baseline ATR", fmtValue(anomaly.baseline_atr))}
      ${row("Change vs baseline", `${fmtSignedValue(anomaly.percent_change)}%`)}
-     ${row("Signal", escape(anomaly.signal))}
+     ${row("Signal", escapeHtml(anomaly.signal))}
      ${explainText(anomaly.explanation)}
      <p class="method">Unusually large price ranges are volatility, not proof of manipulation.</p>`,
     "Available",
@@ -1304,7 +1800,9 @@ function anomalyCard(config, block) {
     return card(
       config.name,
       "unavailable",
-      `<p class="explain">No ${escape(config.name)} block was returned by the backend.</p>`,
+      `<p class="explain">No ${escapeHtml(
+        config.name
+      )} block was returned by the backend.</p>`,
       "Unavailable",
       "unavailable"
     );
@@ -1352,7 +1850,7 @@ function anomalyCard(config, block) {
     return card(
       config.name,
       "unavailable",
-      `<p class="explain">${escape(reason)}</p>
+      `<p class="explain">${escapeHtml(reason)}</p>
        ${details}
        ${methodText(block.method)}`,
       "Unavailable",
@@ -1378,8 +1876,8 @@ function anomalyCard(config, block) {
       row(
         "Hidden layers",
         Array.isArray(block.hidden_layers)
-          ? escape(block.hidden_layers.join(" → "))
-          : escape(block.hidden_layers)
+          ? escapeHtml(block.hidden_layers.join(" → "))
+          : escapeHtml(block.hidden_layers)
       )
     );
   }
@@ -1410,9 +1908,9 @@ function anomalyCard(config, block) {
   );
 
   const body = `
-    <p class="metric ${flagged ? "flagged" : "clear"}>
+    <p class="metric ${flagged ? "flagged" : "clear"}">
       ${fmtValue(score, 4)}
-      <span class="metric-unit">${escape(config.scoreLabel)}</span>
+      <span class="metric-unit">${escapeHtml(config.scoreLabel)}</span>
     </p>
     <p class="metric-note">
       ${
@@ -1442,8 +1940,8 @@ function anomalyCard(config, block) {
 
 function noticeCard(title, message) {
   return `<article class="analysis-card is-unavailable">
-    <h3><span>${escape(title)}</span>${badge("Notice", "unavailable")}</h3>
-    <p class="explain">${escape(message)}</p>
+    <h3><span>${escapeHtml(title)}</span>${badge("Notice", "unavailable")}</h3>
+    <p class="explain">${escapeHtml(message)}</p>
   </article>`;
 }
 
@@ -1477,6 +1975,7 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
     volumeSpikeCard(blocks && blocks.volume_spike),
     volatilityAnomalyCard(blocks && blocks.volatility_anomaly),
   ];
+
   if (els.indicatorGrid) {
     els.indicatorGrid.innerHTML = notices.join("") + indicatorCards.join("");
   }
@@ -1486,77 +1985,450 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
         anomalyCard(config, blocks && blocks[config.key])
       )
     : [];
+
   if (els.anomalyGrid) {
     els.anomalyGrid.innerHTML = notices.join("") + anomalyCards.join("");
   }
 }
 
-// ---------- Result rendering ----------
+/* ==========================================================================
+   Result rendering
+   ========================================================================== */
+
+function clearResults() {
+  destroyChart();
+  state.loadedSelection = null;
+  if (els.metaList) els.metaList.innerHTML = "";
+  if (els.metaBadge) {
+    els.metaBadge.textContent = "";
+    els.metaBadge.className = "meta-badge";
+  }
+  if (els.indicatorGrid) els.indicatorGrid.innerHTML = "";
+  if (els.anomalyGrid) els.anomalyGrid.innerHTML = "";
+  if (els.timeframeControls) els.timeframeControls.innerHTML = "";
+  setTimeframeStatus("", "");
+  setChartRefreshing(false);
+  if (els.dashboardStage) els.dashboardStage.classList.add("hidden");
+}
 
 function renderResult(data, selection, mapped) {
+  state.selection = selection;
+  state.loadedSelection = { ...selection };
   state.interval = data.interval || selection.interval;
+
   renderMeta(data, mapped, selection);
-  renderAnalysis(data.analysis, data.bars.length, mapped.bars.length);
-  showResults();
+  renderAnalysis(
+    data.analysis,
+    Array.isArray(data.bars) ? data.bars.length : 0,
+    mapped.bars.length
+  );
+
+  if (els.dashboardStage) els.dashboardStage.classList.remove("hidden");
+  renderTimeframeOptions(state.interval, selection.period);
+  setTimeframeStatus(
+    "success",
+    `Loaded ${CU.periodLabel(selection.period)} of ${
+      CU.intervalLabel(selection.interval)
+    } bars for ${selection.symbol} · ${mapped.bars.length} complete bar(s) drawn.`
+  );
   renderChart(data, mapped);
 }
 
-// ---------- URL and selection ----------
+/* ==========================================================================
+   Analysis request
+   ========================================================================== */
 
-function syncUrl(selection) {
-  try {
-    const params = new URLSearchParams({
-      symbol: selection.symbol,
-      exchange: selection.exchange,
-      period: selection.period,
-      interval: selection.interval,
+function cancelActiveRequest() {
+  if (state.guard) state.guard.invalidate();
+  setBusy(false);
+}
+
+function selectionKey(selection) {
+  return [
+    selection && selection.symbol,
+    selection && selection.exchange,
+    selection && selection.period,
+    selection && selection.interval,
+  ].join("|");
+}
+
+function retryFor(selection) {
+  return () =>
+    runAnalysis(selection, {
+      preserveResults: Boolean(state.loadedSelection),
+      force: true,
     });
-    window.history.replaceState(
-      null,
-      "",
-      `${window.location.pathname}?${params.toString()}`
+}
+
+async function runAnalysis(selection, options) {
+  if (!CU) {
+    setStatus(
+      "error",
+      "Chart helpers failed to load. Check that chart-utils.js is present, then reload the page."
     );
+    return;
+  }
+
+  const settings = options || {};
+  const key = selectionKey(selection);
+  if (state.loading && state.activeRequestKey === key && !settings.force) {
+    return;
+  }
+
+  const preserveResults = Boolean(
+    settings.preserveResults && state.loadedSelection
+  );
+  const previousSelection = state.loadedSelection
+    ? { ...state.loadedSelection }
+    : null;
+
+  let timedOut = false;
+  state.activeRequestKey = key;
+  hideSelectionNote();
+
+  if (preserveResults) {
+    setChartRefreshing(true);
+    setTimeframeStatus(
+      "loading",
+      `Loading ${CU.periodLabel(selection.period)} for ${
+        selection.symbol
+      }… The current chart stays visible until the new response arrives.`
+    );
+  } else {
+    clearResults();
+  }
+
+  setBusy(true);
+  setStatus(
+    "loading",
+    `Fetching ${CU.periodLabel(selection.period)} of ${
+      CU.intervalLabel(selection.interval)
+    } bars for ${selection.symbol}…`
+  );
+
+  const ticket = state.guard.begin();
+  let timeoutId = null;
+
+  try {
+    timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      state.guard.cancel();
+    }, REQUEST_TIMEOUT_MS);
+
+    const url = CU.buildHistoryUrl(API_ROOT, selection);
+    const response = await fetch(url, {
+      signal: ticket.signal,
+      headers: { Accept: "application/json" },
+    });
+
+    if (!ticket.isCurrent()) return;
+
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = null;
+    }
+
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload.detail === "string"
+          ? payload.detail
+          : `The backend returned HTTP ${response.status}.`;
+      const error = new Error(detail);
+      error.status = response.status;
+      throw error;
+    }
+
+    if (!payload || !Array.isArray(payload.bars)) {
+      throw new Error(
+        "The backend response did not contain a bars array."
+      );
+    }
+
+    const mapped = CU.mapBars(payload.bars);
+    if (!ticket.isCurrent()) return;
+
+    applySelection(selection);
+    syncUrl(selection);
+    renderResult(payload, selection, mapped);
+
+    if (mapped.bars.length) {
+      setStatus(
+        "success",
+        `Analysis complete: ${mapped.bars.length} complete bar(s) drawn from ${mapped.total} returned for ${CU.periodLabel(
+          selection.period
+        )}.`
+      );
+    } else {
+      setTimeframeStatus(
+        "warning",
+        `${CU.periodLabel(selection.period)} returned no complete OHLC bars; nothing was drawn or invented.`
+      );
+      setStatus(
+        "info",
+        `The backend returned ${mapped.total} bar(s), but none had complete OHLC values. Nothing was drawn or invented.`
+      );
+    }
   } catch (error) {
-    // file:// pages and some embedded browsers disallow URL updates.
-  }
-}
+    if (!ticket.isCurrent()) return;
 
-function applySelection(selection) {
-  if (!selection) return;
-  if (els.symbol && selection.symbol !== undefined) {
-    els.symbol.value = selection.symbol;
-  }
-  if (els.exchange && selection.exchange) {
-    els.exchange.value = selection.exchange;
-  }
-  if (els.period && selection.period) {
-    els.period.value = selection.period;
-  }
-  if (els.interval && selection.interval) {
-    els.interval.value = selection.interval;
-  }
-}
+    let message;
+    if (timedOut) {
+      message = `The request exceeded ${Math.round(
+        REQUEST_TIMEOUT_MS / 1000
+      )} seconds and was stopped. The backend or market-data provider may be slow; try again.`;
+    } else if (error && error.name === "AbortError") {
+      message =
+        "The request was cancelled before a response arrived. No stale response was applied.";
+    } else if (error instanceof TypeError) {
+      const localBackend = /(localhost|127\.0\.0\.1)([:\/]|$)/.test(API_ROOT);
+      message = localBackend
+        ? `Cannot reach the FastAPI backend at ${API_ROOT}. Start it with: cd backend, then python -m uvicorn main:app --host 127.0.0.1 --port 8000`
+        : `Cannot reach the analysis backend at ${API_ROOT}. Check the configured backend URL (window.CDF_API_BASE in config.js) and that the backend deployment is online.`;
+    } else if (error && error.status === 502) {
+      message = `The backend is running, but the upstream market-data provider failed: ${error.message} No prices were invented.`;
+    } else {
+      message =
+        error && error.message
+          ? error.message
+          : "The analysis request failed. No data was invented.";
+    }
 
-function selectionFromControls() {
-  return {
-    symbol: els.symbol.value.trim().toUpperCase(),
-    exchange: els.exchange.value,
-    period: els.period.value,
-    interval: els.interval.value,
-  };
-}
-
-// ---------- Deep links ----------
-
-function restoreFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  const symbol = params.get("symbol");
-  const exchange = params.get("exchange");
-
-  if (symbol) {
-    els.symbol.value = symbol.toUpperCase();
-    if (exchange) {
-      els.exchange.value = exchange.toUpperCase();
+    if (preserveResults && previousSelection) {
+      markTimeframeActive(previousSelection.period);
+      setTimeframeStatus(
+        "error",
+        `Could not load ${CU.periodLabel(
+          selection.period
+        )}. The previous ${CU.periodLabel(
+          previousSelection.period
+        )} chart is still shown. ${message}`
+      );
+    } else {
+      setTimeframeStatus(
+        "error",
+        `Could not load ${CU.periodLabel(selection.period)}. ${message}`
+      );
+    }
+    setStatus("error", message, retryFor(selection));
+    console.error("Analysis request failed:", error);
+  } finally {
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+    if (ticket.isCurrent()) {
+      state.activeRequestKey = null;
+      setChartRefreshing(false);
+      setBusy(false);
     }
   }
 }
+
+/* ==========================================================================
+   Events and initialisation
+   ========================================================================== */
+
+function wireEvents() {
+  if (!els.form) return;
+
+  els.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    hideSelectionNote();
+
+    if (state.loading) return;
+
+    const selection = selectionFromControls();
+    const check = CU.validateSymbol(selection.symbol);
+
+    if (!check.valid) {
+      cancelActiveRequest();
+      clearResults();
+      setStatus("error", check.message || "Enter a stock symbol first.");
+      if (els.symbol) els.symbol.focus();
+      return;
+    }
+
+    selection.symbol = check.symbol;
+    if (els.symbol) els.symbol.value = check.symbol;
+
+    closeSuggestions();
+
+    const reconciled = CU.reconcileSelection(
+      selection.period,
+      selection.interval,
+      "period"
+    );
+    if (reconciled.changed) {
+      selection.period = reconciled.period;
+      selection.interval = reconciled.interval;
+      if (els.period) els.period.value = reconciled.period;
+      if (els.interval) els.interval.value = reconciled.interval;
+      showSelectionNote(reconciled.message);
+    }
+
+    if (els.exchange) selection.exchange = els.exchange.value;
+
+    syncUrl(selection);
+    runAnalysis(selection);
+  });
+
+  if (els.symbol) {
+    els.symbol.addEventListener("input", handleSymbolInput);
+    els.symbol.addEventListener("focus", () => {
+      const value = els.symbol.value.trim();
+      if (value) updateSuggestions(value);
+    });
+
+    els.symbol.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveSuggestion(1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveSuggestion(-1);
+      } else if (event.key === "Escape") {
+        closeSuggestions();
+      } else if (event.key === "Enter" && state.activeSuggestion >= 0) {
+        const items = els.suggestions
+          ? els.suggestions.querySelectorAll(".suggestion-item")
+          : [];
+        const item = items[state.activeSuggestion];
+        if (item) {
+          event.preventDefault();
+          selectSuggestion(item.getAttribute("data-symbol"));
+        }
+      }
+    });
+  }
+
+  document.addEventListener("click", (event) => {
+    if (!els.symbol || !els.suggestions) return;
+    const wrapper = els.symbol.closest(".symbol-field-wrap");
+    if (wrapper && !wrapper.contains(event.target)) closeSuggestions();
+  });
+
+  if (els.period) {
+    els.period.addEventListener("change", () => {
+      const reconciled = CU.reconcileSelection(
+        els.period.value,
+        els.interval.value,
+        "period"
+      );
+      if (reconciled.changed) {
+        els.interval.value = reconciled.interval;
+        showSelectionNote(reconciled.message);
+      } else {
+        hideSelectionNote();
+      }
+    });
+  }
+
+  if (els.interval) {
+    els.interval.addEventListener("change", () => {
+      const reconciled = CU.reconcileSelection(
+        els.period.value,
+        els.interval.value,
+        "interval"
+      );
+      if (reconciled.changed) {
+        els.period.value = reconciled.period;
+        showSelectionNote(reconciled.message);
+      } else {
+        hideSelectionNote();
+      }
+    });
+  }
+
+  if (els.timeframeControls) {
+    els.timeframeControls.addEventListener("click", (event) => {
+      const button =
+        event.target && event.target.closest
+          ? event.target.closest(".timeframe-btn")
+          : null;
+      if (!button || button.disabled || state.loading) return;
+      if (!state.loadedSelection) {
+        setTimeframeStatus(
+          "warning",
+          "Run a stock analysis once before choosing a historical timeframe."
+        );
+        return;
+      }
+
+      const period = button.getAttribute("data-period");
+      if (!period || !CU.isCompatible(period, state.loadedSelection.interval)) {
+        setTimeframeStatus(
+          "error",
+          `${CU.periodLabel(
+            period
+          )} is not available with ${CU.intervalLabel(
+            state.loadedSelection.interval
+          )} bars. Choose another window.`
+        );
+        return;
+      }
+
+      if (period === state.loadedSelection.period) {
+        markTimeframeActive(period);
+        setTimeframeStatus(
+          "success",
+          `${CU.periodLabel(
+            period
+          )} is already loaded for ${state.loadedSelection.symbol}.`
+        );
+        return;
+      }
+
+      const nextSelection = { ...state.loadedSelection, period };
+      runAnalysis(nextSelection, { preserveResults: true, force: true });
+    });
+  }
+
+  if (els.modeCandles) {
+    els.modeCandles.addEventListener("click", () => setMode("candles"));
+  }
+  if (els.modeLine) {
+    els.modeLine.addEventListener("click", () => setMode("line"));
+  }
+  if (els.volumeToggle) {
+    els.volumeToggle.addEventListener("change", () => {
+      setVolumeVisible(els.volumeToggle.checked);
+      if (state.lastData) {
+        renderChartNote(
+          state.mapped,
+          state.lastData,
+          state.volumeSeries ? !els.volumeToggle.disabled : false
+        );
+      }
+    });
+  }
+  if (els.levelsToggle) {
+    els.levelsToggle.addEventListener("change", () => {
+      state.showLevels = els.levelsToggle.checked;
+      if (state.lastData) {
+        applyLevels(state.lastData.analysis);
+        renderChartNote(
+          state.mapped,
+          state.lastData,
+          state.volumeSeries ? !els.volumeToggle.disabled : false
+        );
+      }
+    });
+  }
+  if (els.resetZoom) {
+    els.resetZoom.addEventListener("click", resetZoom);
+  }
+
+  window.addEventListener("themechange", updateChartTheme);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (!CU) {
+    setStatus(
+      "error",
+      "Chart helpers failed to load, so the analyser cannot start. Check that chart-utils.js is present and reload."
+    );
+    return;
+  }
+
+  restoreFromUrl();
+  wireEvents();
+});

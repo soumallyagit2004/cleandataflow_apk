@@ -36,6 +36,19 @@
     max: "maximum",
   };
 
+  // Historical windows offered in the results area. They are filtered again by
+  // the active interval so an option is only shown when the provider supports
+  // the pair. The labels are deliberately short for a compact segmented control.
+  const TIMEFRAME_OPTIONS = Object.freeze([
+    { period: "1d", label: "1D", title: "1 day" },
+    { period: "5d", label: "5D", title: "5 days" },
+    { period: "1mo", label: "1M", title: "1 month" },
+    { period: "3mo", label: "3M", title: "3 months" },
+    { period: "6mo", label: "6M", title: "6 months" },
+    { period: "1y", label: "1Y", title: "1 year" },
+    { period: "5y", label: "5Y", title: "5 years" },
+  ]);
+
   const INTERVAL_LABELS = {
     "1m": "1 minute",
     "2m": "2 minutes",
@@ -84,6 +97,8 @@
     max: 10,
   };
 
+  // Latest-bar card configuration. Kept separate from marker configuration so
+  // adding a historical marker source never duplicates an analysis card.
   const DETECTOR_CONFIG = Object.freeze([
     {
       key: "lof_anomaly",
@@ -120,6 +135,91 @@
     },
   ]);
 
+  // All anomaly markers deliberately share one restrained red circle style.
+  // The legend and the marker-detail tooltip distinguish the detectors.
+  const MARKER_DETECTOR_CONFIG = Object.freeze([
+    {
+      key: "lof_anomaly",
+      name: "Local Outlier Factor (LOF)",
+      short: "LOF",
+      latestScoreField: "lof_score",
+      latestScoreLabel: "LOF score",
+      latestThresholdField: "threshold",
+      latestSignalField: null,
+      latestSignalValues: [],
+      latestAnomalyField: "is_anomaly",
+      hasScore: true,
+      latestOnly: false,
+    },
+    {
+      key: "volume_spike",
+      name: "Volume spike",
+      short: "VOL",
+      latestScoreField: "volume_ratio",
+      latestScoreLabel: "Volume ratio",
+      latestThresholdField: null,
+      latestThresholdValue: 2.0,
+      latestSignalField: "signal",
+      latestSignalValues: ["spike"],
+      latestAnomalyField: null,
+      hasScore: true,
+      latestOnly: false,
+    },
+    {
+      key: "volatility_anomaly",
+      name: "Volatility anomaly",
+      short: "ATR",
+      latestScoreField: "volatility_ratio",
+      latestScoreLabel: "Volatility ratio",
+      latestThresholdField: null,
+      latestThresholdValue: 2.0,
+      latestSignalField: "signal",
+      latestSignalValues: ["anomalous"],
+      latestAnomalyField: null,
+      hasScore: true,
+      latestOnly: false,
+    },
+    {
+      key: "volume_price_divergence",
+      name: "Volume–price divergence",
+      short: "DIV",
+      latestScoreField: null,
+      latestScoreLabel: null,
+      latestThresholdField: null,
+      latestSignalField: "signal",
+      latestSignalValues: ["bullish", "bearish"],
+      latestAnomalyField: null,
+      hasScore: false,
+      latestOnly: false,
+    },
+    {
+      key: "autoencoder_anomaly",
+      name: "Autoencoder",
+      short: "AE",
+      latestScoreField: "reconstruction_error",
+      latestScoreLabel: "Reconstruction error",
+      latestThresholdField: "threshold",
+      latestSignalField: null,
+      latestSignalValues: [],
+      latestAnomalyField: "is_anomaly",
+      hasScore: true,
+      latestOnly: true,
+    },
+    {
+      key: "transformer_anomaly",
+      name: "Transformer",
+      short: "TR",
+      latestScoreField: "anomaly_score",
+      latestScoreLabel: "Prediction error",
+      latestThresholdField: "threshold",
+      latestSignalField: null,
+      latestSignalValues: [],
+      latestAnomalyField: "is_anomaly",
+      hasScore: true,
+      latestOnly: true,
+    },
+  ]);
+
   // NSE and BSE both use India Standard Time; daily Yahoo bars are timestamped
   // at 18:30Z (00:00 IST), so formatting in IST preserves the trading date.
   const EXCHANGE_TIME_ZONE = "Asia/Kolkata";
@@ -136,6 +236,17 @@
 
   function isCompatible(period, interval) {
     return periodsForInterval(interval).includes(period);
+  }
+
+  function timeframesForInterval(interval) {
+    return TIMEFRAME_OPTIONS.filter((option) =>
+      isCompatible(option.period, interval)
+    ).map((option) => ({ ...option }));
+  }
+
+  function timeframeLabel(period) {
+    const option = TIMEFRAME_OPTIONS.find((item) => item.period === period);
+    return option ? option.label : periodLabel(period);
   }
 
   function periodLabel(period) {
@@ -436,174 +547,389 @@
       });
     }
     if (tickMarkType === 1) {
+      // Month ticks stay as "Aug" so they cannot be mistaken for a day
+      // number. Year ticks (type 0) provide the year for multi-year ranges.
       return date.toLocaleDateString(undefined, {
         ...zone,
         month: "short",
-        year: "2-digit",
       });
     }
     return date.toLocaleDateString(undefined, {
       ...zone,
-      month: "short",
       day: "numeric",
     });
   }
 
   // ---------- Anomaly marker placement ----------
-  /**
-   * Build markers only for detectors that are available AND flag the latest
-   * evaluated bar. The marker is anchored to the exact returned bar whose
-   * timestamp matches `evaluated_timestamp`; no marker is invented.
-   */
-  function buildAnomalyMarkers(analysis, bars) {
-    const markers = [];
-    const entries = [];
-    const issues = [];
+  function _uniqueStrings(values) {
+    return Array.from(
+      new Set(values.filter((value) => typeof value === "string" && value.trim()))
+    );
+  }
 
-    if (!analysis || typeof analysis !== "object") {
+  function _lastBarWithVolume(bars) {
+    if (!Array.isArray(bars)) return null;
+    for (let index = bars.length - 1; index >= 0; index -= 1) {
+      const bar = bars[index];
+      const volume = finiteNumber(bar && bar.volume);
+      if (bar && volume !== null && volume > 0) return bar;
+    }
+    return null;
+  }
+
+  function _inferLatestTimestamp(config, bars) {
+    if (!Array.isArray(bars) || !bars.length) return null;
+    if (config.key === "volume_spike" || config.key === "volume_price_divergence") {
+      const withVolume = _lastBarWithVolume(bars);
+      return withVolume ? withVolume.timestamp : null;
+    }
+    return bars[bars.length - 1].timestamp;
+  }
+
+  function _latestMarkerCandidate(config, block, bars) {
+    if (!block || typeof block !== "object") {
+      return { status: "unavailable", reason: "No analysis block was returned." };
+    }
+
+    if (block.available !== true) {
       return {
-        markers,
-        entries,
-        issues: ["No analysis object was returned by the backend."],
-        flaggedCount: 0,
+        status: "unavailable",
+        reason:
+          block.explanation || "The backend marked this detector unavailable.",
       };
     }
 
-    DETECTOR_CONFIG.forEach((config) => {
+    let flagged = false;
+    if (config.latestAnomalyField) {
+      const value = block[config.latestAnomalyField];
+      if (typeof value !== "boolean") {
+        return {
+          status: "unavailable",
+          reason:
+            "The backend marked the detector available but did not return a " +
+            "boolean anomaly flag.",
+        };
+      }
+      flagged = value === true;
+    } else if (config.latestSignalField) {
+      flagged = config.latestSignalValues.includes(block[config.latestSignalField]);
+    } else {
+      return {
+        status: "unavailable",
+        reason: "This detector has no defined latest-bar anomaly condition.",
+      };
+    }
+
+    if (!flagged) {
+      return {
+        status: "clear",
+        reason: block.explanation || "",
+        score: config.latestScoreField
+          ? finiteNumber(block[config.latestScoreField])
+          : null,
+        threshold: config.latestThresholdField
+          ? finiteNumber(block[config.latestThresholdField])
+          : finiteNumber(config.latestThresholdValue),
+        timestamp: block.evaluated_timestamp || _inferLatestTimestamp(config, bars),
+      };
+    }
+
+    return {
+      status: "flagged",
+      reason: block.explanation || "",
+      score: config.latestScoreField
+        ? finiteNumber(block[config.latestScoreField])
+        : null,
+      threshold: config.latestThresholdField
+        ? finiteNumber(block[config.latestThresholdField])
+        : finiteNumber(config.latestThresholdValue),
+      timestamp: block.evaluated_timestamp || _inferLatestTimestamp(config, bars),
+      signal: config.latestSignalField ? block[config.latestSignalField] : null,
+      values: {},
+      source: "latest",
+    };
+  }
+
+  function _historicalEnvelope(historical, key) {
+    const detectors = historical && historical.detectors;
+    if (!detectors || typeof detectors !== "object") return null;
+    const block = detectors[key];
+    return block && typeof block === "object" ? block : null;
+  }
+
+  /**
+   * Build red circular markers from timestamped historical detector points and
+   * the real latest-bar flags. Every marker is anchored to a returned complete
+   * bar; markers that cannot be mapped are reported, never guessed. Multiple
+   * detector points on one candle share one clustered marker so the chart stays
+   * legible, while the cluster retains every detector detail for its tooltip.
+   */
+  function buildAnomalyMarkers(analysis, bars, historical, options) {
+    const issues = [];
+    const limitations = [];
+    const entries = [];
+    const placedPoints = [];
+    const maximumLabels = Math.max(
+      0,
+      Number.isFinite(options && options.maximumLabels)
+        ? options.maximumLabels
+        : 40
+    );
+
+    if (historical && Array.isArray(historical.limitations)) {
+      limitations.push(...historical.limitations);
+    }
+
+    if (!analysis || typeof analysis !== "object") {
+      return {
+        markers: [],
+        entries: [],
+        issues: ["No analysis object was returned by the backend."],
+        limitations: _uniqueStrings(limitations),
+        flaggedCount: 0,
+        markedCandles: 0,
+        pointCount: 0,
+        latestOnlyKeys: [],
+        labelsSuppressed: false,
+      };
+    }
+
+    MARKER_DETECTOR_CONFIG.forEach((config) => {
       const block = analysis[config.key];
+      const envelope = _historicalEnvelope(historical, config.key);
+      const envelopeScope = envelope && envelope.scope ? envelope.scope : null;
+      const latestOnly =
+        config.latestOnly ||
+        envelopeScope === "latest_only" ||
+        (!envelope && config.latestOnly);
+      const historicalAvailable = Boolean(
+        envelope &&
+          envelope.scope !== "latest_only" &&
+          envelope.historical_available !== false &&
+          envelope.available === true
+      );
+
+      if (envelope && Array.isArray(envelope.limitations)) {
+        limitations.push(...envelope.limitations);
+      }
+      if (envelope && envelope.scope === "latest_only" && envelope.reason) {
+        limitations.push(envelope.reason);
+      }
+
       const base = {
         key: config.key,
         name: config.name,
         short: config.short,
-        color: config.color,
-        position: config.position,
-        scoreLabel: config.scoreLabel,
+        color: "#ef4444",
+        position: "aboveBar",
+        scoreLabel: config.latestScoreLabel,
+        scope: historicalAvailable ? "historical" : "latest_only",
+        historicalAvailable,
+        hasHistoricalEnvelope: Boolean(envelope),
+        latestOnly,
       };
 
-      if (!block || typeof block !== "object") {
-        entries.push({
-          ...base,
-          status: "unavailable",
-          reason: "No analysis block was returned.",
-          score: null,
-          threshold: null,
-          evaluatedTimestamp: null,
-          price: null,
-        });
-        return;
-      }
+      const detectorPoints = [];
+      const seenTimes = new Set();
+      let historicalCount = 0;
+      let unplacedCount = 0;
+      let lastPlacedBar = null;
 
-      const score = finiteNumber(block[config.scoreField]);
-      const threshold = finiteNumber(block[config.thresholdField]);
-      const evaluatedTimestamp = block.evaluated_timestamp || null;
+      if (
+        envelope &&
+        envelope.scope !== "latest_only" &&
+        envelope.available === true &&
+        Array.isArray(envelope.points)
+      ) {
+        envelope.points.forEach((point) => {
+          if (!point || point.is_anomaly !== true) return;
+          const parsed = parseTimestamp(point.timestamp);
+          if (parsed === null) return;
+          if (seenTimes.has(parsed)) return;
+          seenTimes.add(parsed);
 
-      if (block.available !== true) {
-        entries.push({
-          ...base,
-          status: "unavailable",
-          reason:
-            block.explanation ||
-            "The backend marked this detector unavailable.",
-          score,
-          threshold,
-          evaluatedTimestamp,
-          price: null,
-        });
-        return;
-      }
+          const bar = barAtTimestamp(bars, point.timestamp);
+          if (!bar || finiteNumber(bar.close) === null) {
+            unplacedCount += 1;
+            const reason =
+              `${config.name} returned a historical point whose timestamp ` +
+              `(${point.timestamp || "missing"}) does not match a complete ` +
+              `returned bar, so no marker was drawn for that point.`;
+            issues.push(reason);
+            return;
+          }
 
-      if (block.is_anomaly !== true) {
-        if (typeof block.is_anomaly !== "boolean") {
-          entries.push({
-            ...base,
-            status: "unavailable",
-            reason:
-              "The backend marked the detector available but did not return " +
-              "a boolean is_anomaly value.",
-            score,
-            threshold,
-            evaluatedTimestamp,
-            price: null,
+          historicalCount += 1;
+          lastPlacedBar = bar;
+          detectorPoints.push({
+            key: config.key,
+            detectorName: config.name,
+            short: config.short,
+            timestamp: bar.timestamp,
+            time: bar.time,
+            price: bar.close,
+            source: "historical",
+            signal: point.signal || null,
+            score: finiteNumber(point.score),
+            threshold: finiteNumber(point.threshold),
+            scoreLabel: point.score_label || config.latestScoreLabel,
+            values:
+              point.values && typeof point.values === "object"
+                ? { ...point.values }
+                : {},
+            explanation: point.explanation || "",
           });
-          return;
+        });
+      }
+
+      const latest = _latestMarkerCandidate(config, block, bars);
+      let latestPlaced = false;
+      let latestBar = null;
+
+      if (latest.status === "flagged") {
+        latestBar = barAtTimestamp(bars, latest.timestamp);
+        if (!latestBar || finiteNumber(latestBar.close) === null) {
+          const reason =
+            `${config.name} flagged its latest evaluated bar, but its ` +
+            `timestamp (${latest.timestamp || "missing"}) does not match a ` +
+            `complete returned bar, so no marker was drawn for that point.`;
+          issues.push(reason);
+          unplacedCount += 1;
+        } else if (!seenTimes.has(latestBar.time)) {
+          latestPlaced = true;
+          seenTimes.add(latestBar.time);
+          lastPlacedBar = latestBar;
+          detectorPoints.push({
+            key: config.key,
+            detectorName: config.name,
+            short: config.short,
+            timestamp: latestBar.timestamp,
+            time: latestBar.time,
+            price: latestBar.close,
+            source: "latest",
+            signal: latest.signal || null,
+            score: latest.score,
+            threshold: latest.threshold,
+            scoreLabel: config.latestScoreLabel,
+            values: latest.values || {},
+            explanation: latest.reason || "",
+          });
         }
-        entries.push({
-          ...base,
-          status: "clear",
-          reason: block.explanation || "",
-          score,
-          threshold,
-          evaluatedTimestamp,
-          price: null,
-        });
-        return;
       }
 
-      const bar = barAtTimestamp(bars, evaluatedTimestamp);
-      if (!bar) {
-        const reason =
-          `${config.name} flagged an anomaly, but its evaluated timestamp ` +
-          `(${evaluatedTimestamp || "missing"}) does not match a complete ` +
-          `returned bar, so no marker was drawn.`;
-        issues.push(reason);
-        entries.push({
-          ...base,
-          status: "unplaced",
-          reason,
-          score,
-          threshold,
-          evaluatedTimestamp,
-          price: null,
-        });
-        return;
+      detectorPoints.forEach((point) => placedPoints.push(point));
+
+      const flaggedCount = detectorPoints.length;
+      let status = "unavailable";
+      if (
+        flaggedCount > 0 ||
+        latestPlaced ||
+        (latest.status === "flagged" && latestBar)
+      ) {
+        status = "flagged";
+      } else if (latest.status === "clear" || (envelope && envelope.available === true)) {
+        status = "clear";
+      } else if (latest.status === "unavailable" && !envelope) {
+        status = "unavailable";
+      } else if (latest.status === "unavailable" && envelope) {
+        status = envelope.available === false ? "unavailable" : "clear";
+      }
+      if (status !== "flagged" && unplacedCount > 0 && latest.status === "flagged") {
+        status = "unplaced";
       }
 
-      const price = finiteNumber(bar.close);
-      if (price === null) {
-        const reason =
-          `${config.name} flagged an anomaly, but the matching bar has no ` +
-          `usable close price, so no marker was drawn.`;
-        issues.push(reason);
-        entries.push({
-          ...base,
-          status: "unplaced",
-          reason,
-          score,
-          threshold,
-          evaluatedTimestamp,
-          price: null,
-        });
-        return;
+      let reason =
+        latest.status === "unavailable" || latest.status === "clear"
+          ? latest.reason || ""
+          : (envelope && envelope.reason) || latest.reason || "";
+      if (
+        envelope &&
+        envelope.available !== true &&
+        !latest.reason &&
+        envelope.reason
+      ) {
+        reason = envelope.reason;
       }
-
-      markers.push({
-        time: bar.time,
-        position: config.position,
-        color: config.color,
-        shape: config.shape,
-        text: config.short,
-        size: 1,
-      });
 
       entries.push({
         ...base,
-        status: "flagged",
-        reason: block.explanation || "",
-        score,
-        threshold,
-        evaluatedTimestamp,
-        barTimestamp: bar.timestamp,
-        price,
-        method: block.method || "",
+        status,
+        reason,
+        score: latest.score === undefined ? null : latest.score,
+        threshold: latest.threshold === undefined ? null : latest.threshold,
+        evaluatedTimestamp:
+          (latestBar && latestBar.timestamp) ||
+          (lastPlacedBar && lastPlacedBar.timestamp) ||
+          (latest.timestamp || null),
+        barTimestamp: lastPlacedBar ? lastPlacedBar.timestamp : null,
+        price: lastPlacedBar ? finiteNumber(lastPlacedBar.close) : null,
+        historicalPoints: historicalCount,
+        latestFlag: latest.status === "flagged" && Boolean(latestBar),
+        detectedBars: finiteNumber(envelope && envelope.detected_bars),
+        unplacedPoints: unplacedCount,
+        method: (envelope && envelope.method) || block?.method || "",
       });
+    });
+
+    const byTime = new Map();
+    placedPoints.forEach((point) => {
+      if (!byTime.has(point.time)) {
+        byTime.set(point.time, {
+          time: point.time,
+          barTimestamp: point.timestamp,
+          price: point.price,
+          points: [],
+        });
+      }
+      byTime.get(point.time).points.push(point);
+    });
+
+    const clusters = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
+    const labelsSuppressed = clusters.length > maximumLabels;
+    const markers = clusters.map((cluster) => {
+      const text =
+        labelsSuppressed || cluster.points.length === 0
+          ? ""
+          : cluster.points.length > 1
+            ? String(cluster.points.length)
+            : cluster.points[0].short;
+      return {
+        time: cluster.time,
+        position: "aboveBar",
+        color: "#ef4444",
+        shape: "circle",
+        text,
+        size: labelsSuppressed
+          ? 0.55
+          : cluster.points.length > 1
+            ? 1.15
+            : 1,
+      };
     });
 
     return {
       markers,
+      clusters,
       entries,
       issues,
+      limitations: _uniqueStrings(limitations),
       flaggedCount: markers.length,
+      markedCandles: clusters.length,
+      pointCount: placedPoints.length,
+      latestOnlyKeys: entries
+        .filter((entry) => entry.latestOnly)
+        .map((entry) => entry.key),
+      labelsSuppressed,
     };
+  }
+
+  function markerClusterAtTime(markerResult, time) {
+    if (!markerResult || !Array.isArray(markerResult.clusters)) return null;
+    const target = parseTimestamp(time);
+    if (target === null) return null;
+    return (
+      markerResult.clusters.find((cluster) => cluster.time === target) || null
+    );
   }
 
   /**
@@ -625,6 +951,7 @@
           price,
           color: "#2962ff",
           lineStyle: 2,
+          axisLabelVisible: true,
           source: "sma",
         });
       }
@@ -640,6 +967,7 @@
           price,
           color: "#00897b",
           lineStyle: 2,
+          axisLabelVisible: true,
           source: "ema",
         });
       }
@@ -660,6 +988,10 @@
           price,
           color: "#9e9e9e",
           lineStyle: 1,
+          // The levels stay visible as dotted lines, but their right-axis
+          // labels are suppressed because five levels plus SMA/EMA overlap on
+          // compressed ranges. The Fibonacci card below lists every level.
+          axisLabelVisible: false,
           source: "fibonacci",
         });
       });
@@ -778,9 +1110,13 @@
     INTERVALS,
     PERIOD_LABELS,
     INTERVAL_LABELS,
+    TIMEFRAME_OPTIONS,
     DETECTOR_CONFIG,
+    MARKER_DETECTOR_CONFIG,
     isIntraday,
     periodsForInterval,
+    timeframesForInterval,
+    timeframeLabel,
     isCompatible,
     periodLabel,
     intervalLabel,
@@ -798,6 +1134,7 @@
     formatDateTime,
     formatTickMark,
     buildAnomalyMarkers,
+    markerClusterAtTime,
     buildIndicatorLevels,
     RequestGuard,
     buildHistoryUrl,

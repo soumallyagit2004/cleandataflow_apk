@@ -3,22 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Clean Data Flow — Data-driven stock analysis with real market data, technical indicators, and statistical anomaly detection.">
-  <title>Clean Data Flow</title>
+  <meta name="description" content="Clean Data Flow — data-driven NSE market overview, stock exploration and explainable technical analysis.">
+  <title>Clean Data Flow — Market Overview</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css?v=20261022h">
+  <script>
+    /* Apply the saved appearance before first paint. Dark is the default. */
+    try {
+      if (localStorage.getItem("clean-data-theme") === "light") {
+        document.documentElement.dataset.theme = "light";
+      }
+    } catch (error) {}
+  </script>
 </head>
 <body>
+  <div class="background-layer" aria-hidden="true"></div>
 
-  <!-- Background layer — fixed behind all content, respects prefers-reduced-motion -->
-  <div class="background-layer"></div>
-
-  <nav>
+  <nav aria-label="Primary navigation">
     <div class="brand-container">
-      <a href="index.html" class="logo">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <a href="index.html" class="logo" aria-label="CLEANDATAFLOW — Clean Data Flow home">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7"></rect>
           <circle cx="8.5" cy="8.5" r="2.5"></circle>
           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -28,147 +34,122 @@
     </div>
 
     <ul class="nav-links">
-      <li><a href="index.html" class="active">HOME</a></li>
+      <li class="active"><a href="index.html" class="active" aria-current="page">HOME</a></li>
       <li><a href="stocks.html">STOCKS</a></li>
       <li><a href="stock-analysis.html">STOCK ANALYSER</a></li>
       <li><a href="wishlist.html">WISHLIST</a></li>
     </ul>
 
-    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Toggle dark/light mode">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="moonIcon" style="display:block">
-        <circle cx="12" cy="12" r="5"></circle>
-        <line x1="12" y1="1" x2="12" y2="3"></line>
-        <line x1="12" y1="21" x2="12" y2="23"></line>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-        <line x1="1" y1="12" x2="3" y2="12"></line>
-        <line x1="21" y1="12" x2="23" y2="12"></line>
-        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    <button type="button" class="theme-toggle" id="themeToggle" aria-label="Switch between dark and light appearance">
+      <svg id="moonIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"></path>
       </svg>
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="sunIcon" style="display:none">
-        <circle cx="12" cy="12" r="5"></circle>
-        <line x1="12" y1="1" x2="12" y3="3"></line>
-        <line x1="12" y1="21" x2="12" y2="23"></line>
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-        <line x1="1" y1="12" x2="3" y2="12"></line>
-        <line x1="21" y1="12" x2="23" y2="12"></line>
+      <svg id="sunIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+        <circle cx="12" cy="12" r="4"></circle>
+        <line x1="12" y1="2" x2="12" y2="4"></line>
+        <line x1="12" y1="20" x2="12" y2="22"></line>
+        <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+        <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+        <line x1="2" y1="12" x2="4" y2="12"></line>
+        <line x1="20" y1="12" x2="22" y2="12"></line>
+        <line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line>
+        <line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line>
       </svg>
     </button>
   </nav>
 
   <main class="homepage">
-    <section class="market-overview" aria-labelledby="overviewTitle">
-      <h2 id="overviewTitle" style="font-size:24px; font-weight:700; margin-bottom:16px;">Markets Overview</h2>
-
-      <p style="color:var(--text-secondary); font-size:14px; margin-bottom:24px;">
-        Real-time index data from NSE India and other supported providers. Values are timestamped and honestly labeled.
+    <section class="hero" aria-labelledby="heroTitle">
+      <span class="hero-eyebrow">Explainable market intelligence</span>
+      <h1 id="heroTitle">Market clarity, without the noise.</h1>
+      <p class="subtitle">
+        Real NSE index data, searchable constituents and explainable technical analysis.
+        Every number comes from a named source — unavailable values stay unavailable.
       </p>
-
-      <div class="overview-grid" id="overviewGrid">
-        <!-- Index cards injected by script -->
+      <a class="cta-primary" href="stock-analysis.html">
+        Open the Stock Analyser
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+          <polyline points="12 5 19 12 12 19"></polyline>
+        </svg>
+      </a>
+      <div class="hero-trust" aria-label="Data principles">
+        <span>Real returned data</span>
+        <span>Causal anomaly checks</span>
+        <span>No fabricated values</span>
       </div>
     </section>
 
-    <section class="market-visuals" aria-label="Market chart visuals">
+    <section class="market-overview" aria-labelledby="overviewTitle">
+      <div class="section-title-row">
+        <h2 id="overviewTitle">NSE market overview</h2>
+        <span class="text-muted small" id="indicesMeta">Loading session data…</span>
+      </div>
+
+      <div class="data-banner" role="status">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        <span>
+          <strong>Source:</strong> NSE India latest-session data via the local FastAPI backend.
+          This is not a live tick feed. If the provider is unavailable, the page says so and
+          never substitutes made-up prices.
+        </span>
+      </div>
+
+      <div id="homeError" class="error-msg hidden" role="alert"></div>
+      <div id="overviewGrid" class="overview-grid" aria-live="polite">
+        <div class="loading">Loading NSE indices…</div>
+      </div>
+    </section>
+
+    <section class="market-visuals" aria-labelledby="breadthTitle">
       <div class="visuals-header">
-        <h2>Market Visuals</h2>
-        <a href="stock-analysis.html" class="cta-analyze">Open Stock Analyser</a>
+        <h2 id="breadthTitle">Market breadth</h2>
       </div>
-
-      <div class="chart-preview">
-        <!-- Chart placeholder - actual chart rendered by TradingView on stock analysis page -->
-        <p style="color:var(--text-muted); font-size:13px; padding:20px;">Chart preview — open a stock analysis for real candlestick charts.</p>
+      <div id="breadthPanel" aria-live="polite">
+        <p class="text-muted" style="margin:0;">Breadth will be computed from the indices returned by NSE India.</p>
       </div>
     </section>
 
-    <section class="market-highlights" aria-label="Market highlights">
-      <div style="display:grid; gap:24px;">
-        <div>
-          <h3 style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:12px;">Key Metrics</h3>
-          <p style="color:var(--text-muted); font-size:13px;">
-            No fabricated gainers/losers displayed. Use the Stock Analyser to examine individual stocks with real technical analysis.
+    <section class="market-highlights" aria-labelledby="sourcesTitle">
+      <div class="highlights-grid">
+        <article class="analysis-card">
+          <h3 id="sourcesTitle">Where the data comes from</h3>
+          <p class="muted-copy">
+            Index and constituent data come from NSE India. Historical OHLCV bars come from
+            Yahoo Finance through the backend. The Stock Analyser computes indicators and
+            statistical anomaly scores only from bars the provider actually returned.
           </p>
-        </div>
-        <div>
-          <h3 style="font-size:16px; font-weight:600; color:var(--text-primary); margin-bottom:12px;">Data Sources</h3>
-          <p style="color:var(--text-muted); font-size:13px;">
-            NSE India indices & Yahoo Finance (yfinance) for historical data. All values timestamped. Unavailable data shown as &ldquo;Unavailable&rdquo;, never invented.
+          <p class="muted-copy">
+            Statistical anomalies are unusual observations, not proof of manipulation and not
+            investment advice.
           </p>
-        </div>
+        </article>
+
+        <article class="analysis-card">
+          <h3>Backend connection</h3>
+          <p class="muted-copy">
+            The frontend calls <code id="apiBaseLabel">http://localhost:8000</code>.
+            Start it with <code>cd backend</code> and
+            <code>python -m uvicorn main:app --host 127.0.0.1 --port 8000</code>.
+          </p>
+          <button type="button" class="back-btn" id="testBtn">Test backend connection</button>
+          <pre id="response" class="response-box" aria-live="polite"></pre>
+        </article>
       </div>
     </section>
   </main>
 
-  <script src="script.js"></script>
+  <script src="config.js"></script>
+  <script src="script.js?v=20261022h"></script>
   <script>
-    // ---------- Homepage: render market indices ----------
-    document.addEventListener('DOMContentLoaded', () => {
-      const API_BASE = typeof API_BASE !== 'undefined' ? API_BASE : 'http://localhost:8000';
-      const grid = document.getElementById('overviewGrid');
-      if (!grid) return;
-
-      fetch(`${API_BASE}/api/indices`)
-        .then(res => {
-          if (!res.ok) throw new Error('Backend returned ' + res.status);
-          return res.json();
-        })
-        .then(data => {
-          const indices = data.indices || [];
-          if (indices.length === 0) {
-            grid.innerHTML = '<p class="text-muted" style="grid-column:1/-1;">No indices available from NSE India right now.</p>';
-            return;
-          }
-
-          // Define the indices we want to show, in order, with their status
-          const wanted = [
-            { symbol: 'NIFTY 50', expected: 'NSE', status: 'live' },
-            { symbol: 'SENSEX', expected: 'BSE', status: 'delayed' },
-            { symbol: 'NASDAQ Composite', expected: 'NASDAQ', status: 'live' },
-            { symbol: 'S&P 500', expected: 'US', status: 'live' },
-            { symbol: 'DOW JONES', expected: 'US', status: 'live' }
-          ];
-
-          // Build a map from the backend data
-          const idxMap = {};
-          indices.forEach(idx => {
-            idxMap[idx.symbol] = idx;
-          });
-
-          grid.innerHTML = wanted.map(item => {
-            const idx = idxMap[item.symbol];
-            const statusClass = item.status === 'live' ? 'status-live' : item.status === 'delayed' ? 'status-delayed' : 'status-close';
-            const statusText = item.status === 'live' ? 'LIVE' : item.status === 'delayed' ? 'DELAYED' : 'LAST CLOSE';
-            const changeClass = (idx && (idx.change || 0) >= 0) ? 'positive' : 'negative';
-            const changeValue = idx && idx.change !== undefined && idx.change !== null ? idx.change : 0;
-            const percentValue = idx && idx.percentChange !== undefined && idx.percentChange !== null ? idx.percentChange : 0;
-            const lastValue = idx && idx.last !== undefined && idx.last !== null ? idx.last : '—';
-            const timestamp = idx && idx.timestamp ? new Date(idx.timestamp) : new Date();
-
-            return `
-              <div class="index-card ${statusClass}" style="min-height:120px;">
-                <div style="font-size:14px; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:8px;">
-                  ${item.symbol}
-                </div>
-                <div class="value" style="font-size:28px; font-weight:700; color:var(--text-primary); margin:4px 0;">
-                  ${lastValue}
-                </div>
-                <p class="change ${changeClass}" style="font-size:13px; font-weight:500; margin-top:4px;">
-                  ${changeValue} (${percentValue}%)
-                </p>
-                <div class="timestamp" style="font-size:11px; color:var(--text-muted); margin-top:8px; line-height:1.4;">
-                  Data: ${timestamp.toLocaleString()}  |  ${statusText}
-                </div>
-              </div>
-            `;
-          }).join('');
-        })
-        .catch(err => {
-          console.error(err);
-          grid.innerHTML = '<p class="text-muted" style="grid-column:1/-1;">Error loading market data. Is the backend running?</p>';
-        });
-    });
+    (function () {
+      const label = document.getElementById("apiBaseLabel");
+      if (label && typeof API_BASE === "string") label.textContent = API_BASE;
+    })();
   </script>
 </body>
 </html>

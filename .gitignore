@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Environment and secrets
+.env
+
+# Editors and OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Node (only used by some frontend tooling, none committed)
+node_modules/

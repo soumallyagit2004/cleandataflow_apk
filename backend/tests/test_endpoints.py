@@ -285,6 +285,9 @@ class TestMarketHistorySuccess:
             "true_range_pct",
         ]
         assert tr["history_observations"] == 38
+        assert tr["history_limit"] == 180
+        assert tr["excluded_older_bars"] == 0
+        assert tr["training_epochs"] == 500
         assert tr["evaluated_timestamp"] == bars[-1]["timestamp"]
         assert "no future data" in tr["explanation"]
 
@@ -567,3 +570,76 @@ class TestTrailingIncompleteBarIntegration:
             assert block["evaluated_timestamp"] == bars[-2]["timestamp"], key
             assert block["excluded_trailing_bars"] == 1, key
             assert block["history_observations"] == 38, key
+
+class TestHistoricalAnomalyEndpoint:
+    @patch("main.fetch_history")
+    def test_history_adds_timestamped_historical_points_without_changing_analysis_keys(
+        self, mock_fetch
+    ):
+        timestamps = pd.date_range("2026-01-01", periods=32, freq="D", tz="UTC")
+        bars = []
+        for index, stamp in enumerate(timestamps):
+            close = 100.0 + index * 0.5
+            bars.append(
+                {
+                    "timestamp": stamp.isoformat().replace("+00:00", "Z"),
+                    "open": close,
+                    "high": close + 1.0,
+                    "low": close - 1.0,
+                    "close": close,
+                    "volume": 5000 if index == 28 else 1000,
+                }
+            )
+        mock_fetch.return_value = {
+            "symbol": "RELIANCE",
+            "providerSymbol": "RELIANCE.NS",
+            "exchange": "NSE",
+            "source": "Yahoo Finance via yfinance",
+            "interval": "1d",
+            "fetchedAt": "2026-02-01T00:00:00Z",
+            "lastDataTimestamp": bars[-1]["timestamp"],
+            "freshness": "test",
+            "bars": bars,
+        }
+
+        response = client.get(
+            "/api/market/history?symbol=RELIANCE&exchange=NSE&period=3mo&interval=1d"
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data["analysis"].keys()) == {
+            "sma",
+            "rsi",
+            "fibonacci",
+            "ema_deviation",
+            "volume_price_divergence",
+            "volume_spike",
+            "volatility_anomaly",
+            "lof_anomaly",
+            "autoencoder_anomaly",
+            "transformer_anomaly",
+        }
+
+        historical = data["historical_anomalies"]
+        assert historical["bar_count"] == len(bars)
+        assert set(historical["detectors"].keys()) == {
+            "volume_spike",
+            "volatility_anomaly",
+            "volume_price_divergence",
+            "lof_anomaly",
+            "autoencoder_anomaly",
+            "transformer_anomaly",
+        }
+        assert historical["detectors"]["volume_spike"]["scope"] == "historical"
+        assert historical["detectors"]["autoencoder_anomaly"]["scope"] == "latest_only"
+        assert historical["detectors"]["transformer_anomaly"]["scope"] == "latest_only"
+        assert historical["latest_only_detectors"] == [
+            "autoencoder_anomaly",
+            "transformer_anomaly",
+        ]
+
+        returned = {bar["timestamp"] for bar in bars}
+        for block in historical["detectors"].values():
+            for point in block["points"]:
+                assert point["timestamp"] in returned
+                assert point["is_anomaly"] is True

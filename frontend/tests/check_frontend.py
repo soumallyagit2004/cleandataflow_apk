@@ -49,9 +49,14 @@ def main() -> int:
         "metaPanel",
         "metaList",
         "metaBadge",
+        "timeframePanel",
+        "timeframeControls",
+        "timeframeStatus",
         "chartPanel",
         "chartLegend",
+        "chartCanvasWrap",
         "priceChart",
+        "anomalyMarkerTooltip",
         "chartNote",
         "anomalyLegend",
         "indicatorPanel",
@@ -68,6 +73,7 @@ def main() -> int:
     assert not missing, f"missing element ids: {sorted(missing)}"
 
     expected_scripts = [
+        "config.js",
         "script.js",
         "vendor/lightweight-charts.standalone.production.js",
         "chart-utils.js",
@@ -78,7 +84,8 @@ def main() -> int:
     for src in script_paths:
         assert (ROOT / src).is_file(), f"missing script file: {src}"
 
-    assert "style.css" in parser.stylesheets
+    stylesheet_paths = [href.split("?", 1)[0] for href in parser.stylesheets if href]
+    assert "style.css" in stylesheet_paths, parser.stylesheets
     for href in ("index.html", "stocks.html", "stock-analysis.html"):
         assert href in parser.links, f"navigation link missing: {href}"
 
@@ -103,17 +110,36 @@ def main() -> int:
         "setMarkers",
         "createPriceLine",
         "subscribeCrosshairMove",
+        "subscribeClick",
         "ResizeObserver",
         "RequestGuard",
         "buildAnomalyMarkers",
+        "markerClusterAtTime",
         "mapBars",
         "renderAnalysis",
         "renderAnomalyLegend",
         "runAnalysis",
+        "timeframesForInterval",
         "selectionFromParams",
         "syncUrl",
+        "markerTooltipHtml",
+        "setTimeframeStatus",
+        "activeRequestKey",
+        "preserveResults",
+        "historical_anomalies",
     ):
-        haystack = analysis if symbol not in {"buildAnomalyMarkers", "mapBars", "selectionFromParams"} else utils
+        haystack = (
+            analysis
+            if symbol
+            not in {
+                "buildAnomalyMarkers",
+                "markerClusterAtTime",
+                "mapBars",
+                "timeframesForInterval",
+                "selectionFromParams",
+            }
+            else utils
+        )
         assert symbol in haystack, f"missing implementation marker: {symbol}"
 
     for key in (
@@ -145,6 +171,52 @@ def main() -> int:
     assert "reconcileSelection" in analysis
     assert "AbortController" in utils
     assert "isCurrent" in utils
+
+    # The initial page hides exchange/period/interval controls; the historical
+    # timeframe selector lives inside the results stage and only renders after a
+    # successful explicit analysis.
+    assert 'class="advanced-fields" aria-hidden="true"' in html
+    assert 'id="dashboardStage" class="dashboard-stage hidden"' in html
+    assert html.index('id="timeframePanel"') > html.index('id="dashboardStage"')
+    assert html.index('id="timeframePanel"') < html.index('id="metaPanel"')
+    assert "timeframeControls.addEventListener" in analysis
+    assert "runAnalysis(nextSelection, { preserveResults: true, force: true })" in analysis
+
+    # The published history list is exactly the honest provider-supported set.
+    for period in ('"1d"', '"5d"', '"1mo"', '"3mo"', '"6mo"', '"1y"', '"5y"'):
+        assert period in utils, f"timeframe period missing: {period}"
+    assert "TIMEFRAME_OPTIONS" in utils
+    assert "timeframesForInterval" in utils
+
+    # Historical markers are clustered red circles, not per-detector arrows.
+    assert 'color: "#ef4444"' in utils
+    assert 'shape: "circle"' in utils
+    assert "labelsSuppressed" in utils
+    assert "pointCount" in utils
+    assert "latestOnly" in utils
+    assert "latest_only" in utils
+    assert "historical_available" in utils
+    assert "markerTooltipHtml" in analysis
+    assert "pinnedAnomalyTime" in analysis
+    assert "Historical + latest" in analysis
+
+    # Detector limitations are visible instead of implying historical scores
+    # that the backend deliberately does not return.
+    assert "Latest-only" in analysis
+    assert "no historical series" in analysis
+    assert "not proof" in html.lower()
+
+    style = (ROOT / "style.css").read_text(encoding="utf-8")
+    for selector in (
+        ".timeframe-panel",
+        ".timeframe-controls",
+        ".timeframe-btn.active",
+        ".chart-canvas-wrap",
+        ".anomaly-marker-tooltip",
+        ".marker-swatch",
+        ".anomaly-overlay-legend",
+    ):
+        assert selector in style, f"missing stylesheet selector: {selector}"
 
     # A slow provider call must settle into a visible timeout error instead of
     # leaving the page stuck on "Loading" forever.

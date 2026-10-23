@@ -1,0 +1,4 @@
+# Production web process for Render / Railway / Koyeb and other Procfile hosts.
+# $PORT is provided by the host; localhost development keeps using README's
+# uvicorn command with --reload instead.
+web: python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

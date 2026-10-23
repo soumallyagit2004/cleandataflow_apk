@@ -1,6 +1,13 @@
-fastapi
-uvicorn
-yfinance>=0.2.54
-pytest
-httpx
+# Clean Data Flow backend dependencies.
+# Pinned with upper bounds so a future major release can never break a
+# deployment silently; lower bounds keep installs fast and current.
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+yfinance>=0.2.54,<2.0
 scikit-learn>=1.3,<2.0
+# numpy and pandas are used transitively by scikit-learn / yfinance; they are
+# listed explicitly so hosts resolve compatible binary wheels up front.
+numpy>=1.26,<3.0
+pandas>=2.2,<4.0
+httpx>=0.27,<1.0
+pytest>=8.0,<10.0

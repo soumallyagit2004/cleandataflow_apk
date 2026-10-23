@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import os
 import urllib.request
 import urllib.error
 import json
@@ -22,14 +23,32 @@ from analysis import (
     calculate_lof_anomaly,
     calculate_autoencoder_anomaly,
     calculate_transformer_anomaly,
+    calculate_historical_anomalies,
 )
 
 app = FastAPI()
 
+
+def _parse_allowed_origins(raw: str | None) -> list[str]:
+    """Parse the ALLOWED_ORIGINS environment variable into a CORS origin list.
+
+    Unset/empty keeps the previous development behaviour (any origin allowed).
+    Production deployments should set it explicitly, for example:
+
+        ALLOWED_ORIGINS=https://clean-data-flow.vercel.app,https://www.example.com
+
+    Entries are comma-separated and a trailing slash is ignored.
+    """
+    if not raw or not raw.strip():
+        return ["*"]
+    return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    # This app exposes public read-only GET data; credentials are never needed.
+    allow_origins=_parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS")),
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
 
@@ -78,7 +97,8 @@ def _fetch_nse(path: str) -> Any:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Unexpected error from NSE India: {str(e)}")
+        # Avoid forwarding raw exception internals (URLs, paths) to callers.
+        raise HTTPException(status_code=502, detail=f"Unexpected error from NSE India: {type(e).__name__}")
 
     # Store in cache
     _cache[url] = (data, now + CACHE_TTL_SECONDS)
@@ -155,6 +175,7 @@ def get_market_history(
                 "volume_change_percent": divergence["volume_change_percent"],
                 "signal": divergence["signal"],
                 "available": divergence["available"],
+                "evaluated_timestamp": divergence.get("evaluated_timestamp"),
                 "explanation": divergence["explanation"],
             },
             "volume_spike": {
@@ -164,6 +185,7 @@ def get_market_history(
                 "percent_above_baseline": vs["percent_above_baseline"],
                 "signal": vs["signal"],
                 "available": vs["available"],
+                "evaluated_timestamp": vs.get("evaluated_timestamp"),
                 "explanation": vs["explanation"],
             },
             "volatility_anomaly": {
@@ -173,6 +195,7 @@ def get_market_history(
                 "percent_change": vsa["percent_change"],
                 "signal": vsa["signal"],
                 "available": vsa["available"],
+                "evaluated_timestamp": vsa.get("evaluated_timestamp"),
                 "explanation": vsa["explanation"],
             },
             "lof_anomaly": {
@@ -215,11 +238,18 @@ def get_market_history(
                 "latest_prediction": tr["latest_prediction"],
                 "evaluated_timestamp": tr["evaluated_timestamp"],
                 "history_observations": tr["history_observations"],
+                "history_limit": tr.get("history_limit"),
+                "excluded_older_bars": tr.get("excluded_older_bars", 0),
                 "excluded_trailing_bars": tr.get("excluded_trailing_bars", 0),
+                "training_epochs": tr.get("training_epochs"),
                 "method": tr["method"],
                 "explanation": tr["explanation"],
             },
         }
+
+        # Timestamped historical points live outside the established analysis
+        # key set so existing indicator/detector consumers remain unchanged.
+        result["historical_anomalies"] = calculate_historical_anomalies(bars)
     return result
 
 

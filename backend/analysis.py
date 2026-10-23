@@ -1,6 +1,13 @@
 """Explainable technical indicators calculated only from returned price bars."""
 
+import copy
+import hashlib
+import json
 import math
+import os
+import threading
+import time
+from collections import OrderedDict, deque
 from typing import Any
 
 import numpy as np
@@ -271,6 +278,9 @@ def calculate_divergence(
         "volume_change_percent": round(volume_pct, 2),
         "signal": signal,
         "available": True,
+        "evaluated_timestamp": _evaluated_bar_timestamp(
+            bars, positive_volume=True
+        ),
         "explanation": explanation,
     }
 
@@ -398,10 +408,11 @@ def calculate_volume_spike(
     return {
         "latest_volume": latest_volume,
         "baseline_average": round(baseline_avg, 2),
-        "volume_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
+        "volume_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
         "percent_above_baseline": round(percent_above, 2) if percent_above is not None else None,
         "signal": label,
         "available": True,
+        "evaluated_timestamp": _evaluated_bar_timestamp(bars),
         "explanation": f"latest volume {latest_volume:,} vs baseline avg {baseline_avg:,.0f}; ratio {volume_ratio:.2f}x ({label}) — {percent_above:.1f}% {'above' if percent_above and percent_above > 0 else 'below' if percent_above and percent_above < 0 else 'equal to'} baseline",
     }
 
@@ -504,10 +515,11 @@ def calculate_volatility_anomaly(
     return {
         "recent_atr": round(recent_atr, 2),
         "baseline_atr": round(baseline_atr, 2),
-        "volatility_ratio": round(volatility_ratio, 2) if volatility_ratio is not None else None,
+        "volatility_ratio": round(volatility_ratio, 4) if volatility_ratio is not None else None,
         "percent_change": round(percent_change, 2) if percent_change is not None else None,
         "signal": label,
         "available": True,
+        "evaluated_timestamp": _evaluated_bar_timestamp(bars),
         "explanation": explanation,
     }
 
@@ -626,6 +638,26 @@ def _bar_has_complete_ohlcv(bar: dict[str, Any]) -> bool:
         and high >= low
         and volume >= 0
     )
+
+
+def _evaluated_bar_timestamp(
+    bars: list[dict[str, Any]], *, positive_volume: bool = False
+) -> str | None:
+    """Return the timestamp of the bar the latest-only filters actually use.
+
+    Deterministic volume/volatility/divergence filters do not currently return
+    an evaluated timestamp. The frontend needs one to place a latest-only marker
+    on the exact returned candle, so this helper identifies the last complete
+    OHLCV bar (with a positive volume where the detector requires one).
+    """
+    for bar in reversed(bars):
+        if not _bar_has_complete_ohlcv(bar):
+            continue
+        if positive_volume and float(bar.get("volume") or 0) <= 0:
+            continue
+        timestamp = bar.get("timestamp")
+        return timestamp if isinstance(timestamp, str) else None
+    return None
 
 
 def _trailing_incomplete_bars(
@@ -1115,6 +1147,12 @@ TR_D_MODEL = 16
 TR_N_HEADS = 2
 TR_D_FF = 32
 TR_EPOCHS = 500
+# Long timeframe requests (1Y/5Y) otherwise spend minutes training the pure
+# NumPy Transformer. The latest-only check remains causal but uses a bounded
+# recent window and a reduced epoch count, both reported in the response.
+TR_MAX_HISTORY_BARS = 180
+TR_EXTENDED_EPOCHS = 120
+TR_FULL_TRAINING_HISTORY = 80
 TR_LR = 0.001
 TR_RANDOM_STATE = 42
 TR_MIN_HISTORY = 20          # historical observations before scoring latest
@@ -1348,7 +1386,160 @@ def _tr_build_sequences(history_feats: list[list[float]], seq_len: int):
     return np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
 
 
+# ---------------------------------------------------------------------------
+# Transformer result cache
+# ---------------------------------------------------------------------------
+# The TinyTransformer is fully deterministic (fixed seed, no shuffling), so the
+# same returned bars and parameters always produce the same result. Retraining
+# costs seconds of CPU on every identical call (page reload, another user on
+# the same symbol/timeframe, a period re-selection that ends on the same
+# window), so results are cached behind a digest of EXACTLY the inputs that
+# influence the output:
+#
+#   * every returned bar's values (the model history cap is applied inside the
+#     calculation, so the full list is digested rather than re-deriving which
+#     slice mattered),
+#   * the raw seq_len / epochs / lr arguments,
+#   * every module constant that can change a result byte (history cap, epoch
+#     budget, model shape, seed, thresholds, feature names) plus an explicit
+#     implementation version string.
+#
+# Correctness therefore never depends on the TTL: new bars produce a new key
+# and the Transformer retrains. Entries older than the TTL are simply dropped
+# to bound memory. Unavailable results are never cached: they may reflect
+# transient conditions and must be honestly recomputed. Bounded at 64 entries
+# (oldest evicted). Duplicate concurrent calls may each train once; the lock
+# is never held during training.
+TR_CACHE_VERSION = "tr-result-cache-1"
+TR_CACHE_MAX_ENTRIES = 64
+_TR_CACHE_DEFAULT_TTL_SECONDS = 900.0  # matches the market-overview cache horizon
+
+_TR_CACHE: OrderedDict[tuple, tuple[float, dict[str, Any]]] = OrderedDict()
+_TR_CACHE_LOCK = threading.Lock()
+
+
+def _tr_cache_enabled() -> bool:
+    """Read the CDF_TR_CACHE toggle (default enabled; falsy values disable)."""
+    raw = (os.environ.get("CDF_TR_CACHE") or "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _tr_cache_ttl_seconds() -> float:
+    """Read CDF_TR_CACHE_TTL; invalid or negative values keep the default."""
+    raw = (os.environ.get("CDF_TR_CACHE_TTL") or "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return _TR_CACHE_DEFAULT_TTL_SECONDS
+    return value if value >= 0 else _TR_CACHE_DEFAULT_TTL_SECONDS
+
+
+def _tr_cache_key(bars: Any, seq_len: Any, epochs: Any, lr: Any) -> dict[str, Any] | None:
+    """Build the cache key for one call, or None when it cannot be trusted."""
+    try:
+        fingerprint = json.dumps(
+            {
+                "version": TR_CACHE_VERSION,
+                "algorithm": {
+                    "max_history_bars": TR_MAX_HISTORY_BARS,
+                    "extended_epochs": TR_EXTENDED_EPOCHS,
+                    "full_training_history": TR_FULL_TRAINING_HISTORY,
+                    "d_model": TR_D_MODEL,
+                    "n_heads": TR_N_HEADS,
+                    "d_ff": TR_D_FF,
+                    "random_state": TR_RANDOM_STATE,
+                    "min_history": TR_MIN_HISTORY,
+                    "min_sequences": TR_MIN_SEQUENCES,
+                    "anomaly_k": TR_ANOMALY_K,
+                    "features": list(LOF_FEATURES),
+                    "method": TR_METHOD,
+                },
+                "seq_len": seq_len,
+                "epochs": epochs,
+                "lr": lr,
+                "bars": bars,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return {"digest": hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()}
+    except Exception:
+        # A non-serialisable arguments shape is exotic; bypass the cache
+        # entirely instead of ever aliasing distinct inputs to one entry.
+        return None
+
+
+def _tr_cache_get(key: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return a deep copy of a live cached result, or None on miss/expiry."""
+    if not _tr_cache_enabled() or not key:
+        return None
+    now = time.monotonic()
+    with _TR_CACHE_LOCK:
+        entry = _TR_CACHE.get(key["digest"])
+        if entry is None:
+            return None
+        expires_at, result = entry
+        if now >= expires_at:
+            _TR_CACHE.pop(key["digest"], None)
+            return None
+        _TR_CACHE.move_to_end(key["digest"])
+    return copy.deepcopy(result)
+
+
+def _tr_cache_put(key: dict[str, Any] | None, result: dict[str, Any]) -> None:
+    """Cache one available (True) result; never unavailable results."""
+    if not _tr_cache_enabled() or not key:
+        return
+    if result.get("available") is not True:
+        return
+    expires_at = time.monotonic() + _tr_cache_ttl_seconds()
+    with _TR_CACHE_LOCK:
+        _TR_CACHE[key["digest"]] = (expires_at, copy.deepcopy(result))
+        _TR_CACHE.move_to_end(key["digest"])
+        while len(_TR_CACHE) > TR_CACHE_MAX_ENTRIES:
+            _TR_CACHE.popitem(last=False)
+
+
+def _tr_cache_size() -> int:
+    """Number of currently held entries (tests/ops diagnostics only)."""
+    with _TR_CACHE_LOCK:
+        return len(_TR_CACHE)
+
+
+def _tr_cache_clear() -> None:
+    """Drop every cached Transformer result (tests/ops diagnostics only)."""
+    with _TR_CACHE_LOCK:
+        _TR_CACHE.clear()
+
+
 def calculate_transformer_anomaly(
+    bars: list[dict[str, Any]],
+    seq_len: int = TR_DEFAULT_SEQ_LEN,
+    epochs: int = TR_EPOCHS,
+    lr: float = TR_LR,
+) -> dict[str, Any]:
+    """Score the latest bar with a small deterministic NumPy Transformer.
+
+    Identical calls (same bars and parameters) reuse the cached result of the
+    first computation: see the "Transformer result cache" section above for
+    the exact key, bounding, ttl and disable controls. The returned payload is
+    identical whether it came from training or from the cache; an
+    ``available: False`` result is always freshly computed.
+
+    The full method description is on
+    ``_calculate_transformer_anomaly_uncached``.
+    """
+    key = _tr_cache_key(bars, seq_len, epochs, lr)
+    cached = _tr_cache_get(key)
+    if cached is not None:
+        return cached
+    result = _calculate_transformer_anomaly_uncached(bars, seq_len, epochs, lr)
+    _tr_cache_put(key, result)
+    return result
+
+
+def _calculate_transformer_anomaly_uncached(
     bars: list[dict[str, Any]],
     seq_len: int = TR_DEFAULT_SEQ_LEN,
     epochs: int = TR_EPOCHS,
@@ -1417,8 +1608,15 @@ def calculate_transformer_anomaly(
         )
     valid_lr = float(valid_lr)
 
+    # ---------- bounded history for extended timeframes ----------
+    model_bars = bars
+    excluded_older_bars = 0
+    if isinstance(bars, list) and len(bars) > TR_MAX_HISTORY_BARS:
+        model_bars = bars[-TR_MAX_HISTORY_BARS:]
+        excluded_older_bars = len(bars) - TR_MAX_HISTORY_BARS
+
     # ---------- feature extraction ----------
-    rows = _lof_feature_rows(bars)
+    rows = _lof_feature_rows(model_bars)
 
     if not rows:
         return _tr_unavailable(
@@ -1427,8 +1625,8 @@ def calculate_transformer_anomaly(
             "positive volume.",
         )
 
-    if rows[-1]["bar_index"] != len(bars) - 1:
-        trailing_bars = _trailing_incomplete_bars(bars, rows[-1])
+    if rows[-1]["bar_index"] != len(model_bars) - 1:
+        trailing_bars = _trailing_incomplete_bars(model_bars, rows[-1])
         if trailing_bars is None:
             return _tr_unavailable(
                 "A returned bar after the latest scorable observation has complete "
@@ -1465,6 +1663,15 @@ def calculate_transformer_anomaly(
             evaluated_timestamp=latest_row["timestamp"],
         )
 
+    # Standard windows keep the existing epoch count. Extended histories use a
+    # bounded training budget so a 1Y/5Y timeframe remains responsive.
+    effective_epochs = valid_epochs
+    if (
+        history_count > TR_FULL_TRAINING_HISTORY
+        and valid_epochs > TR_EXTENDED_EPOCHS
+    ):
+        effective_epochs = TR_EXTENDED_EPOCHS
+
     # ---------- build training data ----------
     try:
         history_feats = [row["features"] for row in history_rows]
@@ -1490,7 +1697,7 @@ def calculate_transformer_anomaly(
 
         n_samples = len(x_train)
         indices = np.arange(n_samples)
-        for _epoch in range(valid_epochs):
+        for _epoch in range(effective_epochs):
             total_loss = 0.0
             for idx in indices:
                 pred, cache = model.forward(x_train[idx])
@@ -1550,6 +1757,17 @@ def calculate_transformer_anomaly(
         f"before the latest bar; the latest bar is scored separately as a "
         f"prediction error, so no future data was used."
     )
+    if excluded_older_bars:
+        prefix += (
+            f" Only the most recent {TR_MAX_HISTORY_BARS} returned bars were "
+            f"used for training; {excluded_older_bars} older bars were excluded "
+            f"to keep extended timeframes responsive."
+        )
+    if effective_epochs != valid_epochs:
+        prefix += (
+            f" Training used {effective_epochs} epochs instead of "
+            f"{valid_epochs} for the same reason."
+        )
     if excluded_trailing_bars:
         prefix += (
             f" {excluded_trailing_bars} trailing returned bar(s) with missing or "
@@ -1582,7 +1800,698 @@ def calculate_transformer_anomaly(
         "latest_prediction": latest_prediction_dict,
         "evaluated_timestamp": timestamp,
         "history_observations": history_count,
+        "history_limit": TR_MAX_HISTORY_BARS,
+        "excluded_older_bars": excluded_older_bars,
         "excluded_trailing_bars": excluded_trailing_bars,
+        "training_epochs": effective_epochs,
         "method": TR_METHOD,
         "explanation": explanation,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Timestamped historical anomaly evaluation
+# ---------------------------------------------------------------------------
+
+# The deterministic detectors are cheap enough to evaluate causally on every
+# returned candle. LOF requires a model fit per scored candle, so its walk-
+# forward scan is deliberately bounded. These limits are returned to clients;
+# they are not silently applied.
+HISTORICAL_LOF_MAX_TARGETS = 80
+HISTORICAL_LOF_HISTORY_WINDOW = 240
+
+HISTORICAL_SCOPE_NOTE = (
+    "Historical points are evaluated causally: each point uses only the bar it "
+    "describes and bars before it. No future bar, fabricated timestamp or "
+    "interpolated price is used."
+)
+
+HISTORICAL_LIMITATIONS = [
+    HISTORICAL_SCOPE_NOTE,
+    "Historical markers are limited to the bars returned for the selected "
+    "timeframe and interval; nothing outside that response is inferred.",
+    "Autoencoder and Transformer historical scores are not produced because "
+    "their existing training routines would need to be repeated for every "
+    "candle. They remain latest-complete-bar checks and never contribute "
+    "historical markers.",
+    "A statistical anomaly or divergence is an unusual observation, not proof "
+    "of market manipulation, a prediction, or investment advice.",
+]
+
+
+def _historical_timestamp(bar: dict[str, Any]) -> str | None:
+    """Return a usable returned timestamp, or None when it is missing."""
+    timestamp = bar.get("timestamp") if isinstance(bar, dict) else None
+    if isinstance(timestamp, str) and timestamp.strip():
+        return timestamp
+    return None
+
+
+def _historical_point(
+    bar: dict[str, Any],
+    *,
+    score: float | None,
+    threshold: float | None,
+    score_label: str | None,
+    values: dict[str, Any],
+    explanation: str,
+    signal: str | None = None,
+) -> dict[str, Any]:
+    """Build one timestamped historical point tied to a real returned bar."""
+    return {
+        "timestamp": bar.get("timestamp"),
+        "is_anomaly": True,
+        "score": score,
+        "threshold": threshold,
+        "score_label": score_label,
+        "signal": signal,
+        "values": values,
+        "explanation": explanation,
+    }
+
+
+def _historical_detector(
+    *,
+    available: bool,
+    points: list[dict[str, Any]],
+    evaluated_bars: int,
+    method: str,
+    limitations: list[str] | None = None,
+    reason: str | None = None,
+    scope: str = "historical",
+    detected_bars: int | None = None,
+) -> dict[str, Any]:
+    """Return the stable detector envelope used by the API and frontend."""
+    payload: dict[str, Any] = {
+        "available": bool(available),
+        "historical_available": scope == "historical" and bool(available),
+        "scope": scope,
+        "points": points,
+        "marked_bars": len(points),
+        "evaluated_bars": int(evaluated_bars),
+        "method": method,
+        "limitations": list(limitations or []),
+    }
+    if detected_bars is not None:
+        payload["detected_bars"] = int(detected_bars)
+    if reason:
+        payload["reason"] = reason
+    return payload
+
+
+def _historical_volume_spikes(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate volume spikes on every usable historical bar, causally.
+
+    The existing latest-bar detector compares the target volume with the mean
+    of all preceding positive volumes and calls a ratio above 2.0 a spike.
+    Re-running that same calculation on each prefix preserves its threshold
+    and avoids look-ahead.
+
+    Implementation note: the baseline for the target bar is exactly the
+    growing set of preceding positive volumes, so incremental running totals
+    (left-fold sum, same order as ``sum()``) reproduce the per-prefix
+    calculation bit-for-bit without re-listing the whole prefix per bar.
+    """
+    points: list[dict[str, Any]] = []
+    evaluated = 0
+    period = VOLUME_SPIKE_DEFAULT_PERIOD
+
+    # Running totals over bars 0..i-1 while bar i (the target) is evaluated.
+    # The physics of the original detector: every bar with a non-None volume
+    # joins the volume count; strictly positive ones join the baseline.
+    count_volumes = 0
+    baseline_sum = 0  # left-fold sum of positive volumes, same order as sum()
+    baseline_count = 0
+
+    for bar in bars:
+        if _bar_has_complete_ohlcv(bar) and _historical_timestamp(bar):
+            # The prefix the original detector sees ends at this bar, so the
+            # volume count includes the target bar while the baseline
+            # (strictly positive volumes before it) does not.
+            available = count_volumes + 1 >= period + 1 and baseline_count > 0
+            if available:
+                latest_volume = bar.get("volume")
+                baseline_avg = baseline_sum / baseline_count
+                volume_ratio = latest_volume / baseline_avg
+                evaluated += 1
+                if volume_ratio > 2.0:
+                    rounded_ratio = round(volume_ratio, 4)
+                    points.append(
+                        _historical_point(
+                            bar,
+                            score=rounded_ratio,
+                            threshold=2.0,
+                            score_label="Volume ratio",
+                            values={
+                                "latest_volume": latest_volume,
+                                "baseline_average": round(baseline_avg, 2),
+                                "percent_above_baseline": round(
+                                    ((latest_volume - baseline_avg) / baseline_avg) * 100, 2
+                                ),
+                            },
+                            signal="spike",
+                            explanation=(
+                                f"Volume on {bar.get('timestamp')} was {rounded_ratio}x the average "
+                                "of all preceding positive volumes in the returned series; "
+                                "the existing spike threshold is > 2.0x. This is unusual "
+                                "volume, not proof of manipulation."
+                            ),
+                        )
+                    )
+
+        # Advance the running state for every bar (gated or not), exactly like
+        # the prefix the next bar would see.
+        volume = bar.get("volume")
+        if volume is not None:
+            count_volumes += 1
+            if volume > 0:
+                baseline_sum = baseline_sum + volume
+                baseline_count += 1
+
+    if evaluated == 0:
+        return _historical_detector(
+            available=False,
+            points=[],
+            evaluated_bars=0,
+            method=(
+                "Re-evaluates the existing volume-spike calculation on each "
+                "returned prefix; spike when the target volume is > 2.0x the "
+                "mean of preceding positive volumes."
+            ),
+            reason=(
+                "At least 21 complete OHLCV bars are needed before a historical "
+                "volume baseline can be evaluated."
+            ),
+        )
+
+    return _historical_detector(
+        available=True,
+        points=points,
+        evaluated_bars=evaluated,
+        method=(
+            "Walk-forward re-evaluation of the existing volume-spike formula. "
+            "For each complete historical bar, only that bar and earlier bars "
+            "enter the baseline; the existing spike threshold is ratio > 2.0x."
+        ),
+    )
+
+
+def _historical_volatility_anomalies(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate the existing ATR anomaly on each historical prefix.
+
+    Implementation note: True Range for bar *i* depends only on bars *i* and
+    *i - 1*, and the per-prefix baseline is exactly the set of valid TR values
+    that have slid out of the fixed-size recent window. Incremental state
+    (same left-fold summation order as the per-prefix ``sum()`` calls)
+    reproduces the per-prefix calculation bit-for-bit without re-scanning
+    every prefix.
+    """
+    points: list[dict[str, Any]] = []
+    evaluated = 0
+    period = VOLATILITY_ANOMALY_DEFAULT_PERIOD
+
+    prev_close: float | None = None
+    recent: deque[float] = deque()  # the last `period` valid TR values, oldest first
+    baseline_sum = 0.0  # left-fold sum over valid TR values that left the window
+    baseline_count = 0
+    valid_count = 0  # all valid TR values seen so far
+
+    for bar in bars:
+        high = bar.get("high")
+        low = bar.get("low")
+        close = bar.get("close")
+
+        # Exactly _true_range's per-bar logic: missing values yield no TR and
+        # do not update prev_close.
+        if high is None or low is None or close is None:
+            tr: float | None = None
+        elif prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+
+        if tr is not None:
+            valid_count += 1
+            if len(recent) == period:
+                # The oldest window value permanently joins the baseline, in
+                # the same chronological order the prefix baseline would use.
+                left = recent.popleft()
+                baseline_sum = baseline_sum + left
+                baseline_count += 1
+            recent.append(tr)
+
+        if _bar_has_complete_ohlcv(bar) and _historical_timestamp(bar):
+            # The prefix the original detector sees ends at this bar, so the
+            # state above (which already includes this bar's TR) is the exact
+            # per-prefix state.
+            if valid_count >= period + 1 and baseline_count > 0:
+                recent_atr = sum(recent) / period
+                baseline_atr = baseline_sum / baseline_count
+                if baseline_atr != 0:
+                    volatility_ratio = recent_atr / baseline_atr
+                    evaluated += 1
+                    if volatility_ratio > 2.0:
+                        rounded_ratio = round(volatility_ratio, 4)
+                        percent_change = ((recent_atr - baseline_atr) / baseline_atr) * 100
+                        points.append(
+                            _historical_point(
+                                bar,
+                                score=rounded_ratio,
+                                threshold=2.0,
+                                score_label="Volatility ratio",
+                                values={
+                                    "recent_atr": round(recent_atr, 2),
+                                    "baseline_atr": round(baseline_atr, 2),
+                                    "percent_change": round(percent_change, 2),
+                                },
+                                signal="anomalous",
+                                explanation=(
+                                    f"Recent ATR on {bar.get('timestamp')} was {rounded_ratio}x the "
+                                    "preceding baseline ATR; the existing anomalous threshold "
+                                    "is > 2.0x. This describes unusually large price ranges, "
+                                    "not manipulation or a future move."
+                                ),
+                            )
+                        )
+
+        if close is not None:
+            prev_close = close
+
+    if evaluated == 0:
+        return _historical_detector(
+            available=False,
+            points=[],
+            evaluated_bars=0,
+            method=(
+                "Re-evaluates the existing 20-bar ATR comparison on each "
+                "returned prefix; anomalous when ratio > 2.0x."
+            ),
+            reason=(
+                "At least 21 usable True Range observations are needed before "
+                "a historical volatility baseline can be evaluated."
+            ),
+        )
+
+    return _historical_detector(
+        available=True,
+        points=points,
+        evaluated_bars=evaluated,
+        method=(
+            "Walk-forward re-evaluation of the existing volatility anomaly. "
+            "For each complete historical bar, the recent 20-bar ATR is "
+            "compared with the ATR of preceding returned bars only; the "
+            "existing > 2.0x threshold marks an anomalous observation."
+        ),
+    )
+
+
+def _historical_divergences(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate the existing directional divergence signal on each prefix.
+
+    Divergence is intentionally signal-based. The existing algorithm has no
+    numeric anomaly threshold, so none is invented here. Only the meaningful
+    ``bullish`` and ``bearish`` signals become historical points.
+
+    Implementation note: the per-prefix close and valid-volume lists are grown
+    incrementally and only the fixed ``period``-long lookback window is
+    re-read for each bar, so the per-prefix calculation is reproduced exactly
+    without re-listing the whole prefix per bar.
+    """
+    points: list[dict[str, Any]] = []
+    evaluated = 0
+    detected = 0
+    previous_signal: str | None = None
+    period = DIVERGENCE_DEFAULT_PERIOD
+
+    # Incremental per-prefix lists (the prefix that ends at the current bar).
+    closes: list[float] = []
+    volumes: list[float] = []
+
+    def _pct_change_window(values: list[float], window_first: float, window_last: float) -> float | None:
+        """Replicate _pct_change on the lookback slice without re-slicing."""
+        if len(values) < 2 or window_first == 0:
+            return None
+        return ((window_last - window_first) / abs(window_first)) * 100
+
+    for bar in bars:
+        # Advance the per-prefix lists first: the prefix seen by the original
+        # detector ends at (and includes) the current bar.
+        close = bar.get("close")
+        if close is not None:
+            closes.append(close)
+        volume = bar.get("volume")
+        if volume is not None and volume != 0:
+            volumes.append(volume)
+
+        if not (_bar_has_complete_ohlcv(bar) and _historical_timestamp(bar)):
+            continue
+
+        if len(closes) < period + 1 or len(volumes) < period + 1:
+            continue
+
+        # price change over closes[-(period+1):-1]: first vs last of the slice
+        price_pct = _pct_change_window(
+            closes, closes[len(closes) - 1 - period], closes[len(closes) - 2]
+        )
+        if price_pct is None:
+            # fallback: use all available closes (but still insufficient for lookback)
+            price_pct = (
+                None
+                if closes[0] == 0
+                else ((closes[-1] - closes[0]) / abs(closes[0])) * 100
+            )
+
+        volume_pct = _pct_change_window(
+            volumes, volumes[len(volumes) - 1 - period], volumes[len(volumes) - 2]
+        )
+        if volume_pct is None:
+            volume_pct = (
+                None
+                if volumes[0] == 0
+                else ((volumes[-1] - volumes[0]) / abs(volumes[0])) * 100
+            )
+
+        if price_pct is None or volume_pct is None:
+            continue
+
+        price_up = price_pct > 0
+        price_down = price_pct < 0
+        volume_up = volume_pct > 0
+        volume_down = volume_pct < 0
+
+        if price_up and volume_down:
+            signal = "bearish"
+            explanation = (
+                f"price rose {price_pct:.2f}% while volume fell {abs(volume_pct):.2f}% — "
+                f"bearish divergence, potential resistance"
+            )
+        elif price_down and volume_up:
+            signal = "bullish"
+            explanation = (
+                f"price fell {abs(price_pct):.2f}% while volume rose {volume_pct:.2f}% — "
+                f"bullish divergence, potential support"
+            )
+        elif (price_up and volume_up) or (price_down and volume_down):
+            signal = "aligned"
+            explanation = (
+                f"price {abs(price_pct):.2f}% and volume {abs(volume_pct):.2f}% moved in the same direction — "
+                f"aligned movement, no divergence"
+            )
+        else:
+            # Both zero or both very small
+            signal = "neutral"
+            explanation = (
+                f"price changed {price_pct:.2f}% and volume changed {volume_pct:.2f}% — "
+                f"no meaningful divergence"
+            )
+
+        evaluated += 1
+        if signal not in ("bullish", "bearish"):
+            previous_signal = signal
+            continue
+
+        detected += 1
+        # The directional comparison can stay bearish for many sessions in a
+        # row. Mark the first bar of each sustained run so the chart shows a
+        # readable event without hiding the detector's ongoing context.
+        if signal == previous_signal:
+            continue
+        previous_signal = signal
+
+        points.append(
+            _historical_point(
+                bar,
+                score=None,
+                threshold=None,
+                score_label=None,
+                values={
+                    "price_change_percent": round(price_pct, 2),
+                    "volume_change_percent": round(volume_pct, 2),
+                },
+                signal=signal,
+                explanation=(
+                    f"{explanation} This is the first bar "
+                    "of a sustained directional volume-price run. It is a "
+                    "signal, not a numeric anomaly score; no threshold is "
+                    "claimed."
+                ).strip(),
+            )
+        )
+
+    if evaluated == 0:
+        return _historical_detector(
+            available=False,
+            points=[],
+            evaluated_bars=0,
+            method=(
+                "Re-evaluates the existing 20-bar price/volume direction "
+                "comparison on each returned prefix. Signal-based; no numeric "
+                "anomaly threshold exists."
+            ),
+            reason=(
+                "Insufficient usable closes or positive volumes to evaluate a "
+                "20-bar historical divergence."
+            ),
+        )
+
+    return _historical_detector(
+        available=True,
+        points=points,
+        evaluated_bars=evaluated,
+        detected_bars=detected,
+        method=(
+            "Walk-forward re-evaluation of the existing divergence formula. "
+            "For each complete historical bar, price and volume changes are "
+            "compared over the prior 20-bar lookback. One point marks the "
+            "first bar of each sustained bullish/bearish run; the signal is "
+            "context, not a scored anomaly threshold."
+        ),
+        limitations=[
+            "Divergence is a directional signal with no numeric anomaly "
+            "threshold. Its points have no score or threshold, and no score "
+            "was invented.",
+            "To keep sustained runs readable, only the first bar of each "
+            "bullish/bearish run is marked; the detector's signal can persist "
+            "on later returned bars.",
+        ],
+    )
+
+
+def _historical_lof(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score recent historical bars using only prior observations.
+
+    A separate StandardScaler and LOF novelty model is fitted for each target
+    bar. To keep the endpoint responsive, each model sees at most the trailing
+    ``HISTORICAL_LOF_HISTORY_WINDOW`` feature rows and the scan covers at most
+    the most recent ``HISTORICAL_LOF_MAX_TARGETS`` scorable targets. The
+    detector's established neighbours, contamination and threshold logic are
+    unchanged.
+    """
+    rows = _lof_feature_rows(bars)
+    min_history = max(LOF_MIN_HISTORY, LOF_DEFAULT_NEIGHBORS + 1)
+
+    candidates: list[int] = []
+    for target_index in range(len(rows)):
+        history_start = max(0, target_index - HISTORICAL_LOF_HISTORY_WINDOW)
+        if target_index - history_start >= min_history:
+            candidates.append(target_index)
+
+    if not candidates:
+        return _historical_detector(
+            available=False,
+            points=[],
+            evaluated_bars=0,
+            method=LOF_METHOD,
+            reason=(
+                f"Insufficient history: at least {min_history} usable feature "
+                "observations are required before a bar can be scored."
+            ),
+            limitations=[
+                "LOF historical evaluation is walk-forward and bounded; it "
+                "does not backfill scores that cannot be computed causally."
+            ],
+        )
+
+    selected = candidates[-HISTORICAL_LOF_MAX_TARGETS:]
+    points: list[dict[str, Any]] = []
+    evaluated = 0
+
+    for target_index in selected:
+        target_row = rows[target_index]
+        target_bar = bars[target_row["bar_index"]]
+        target_timestamp = _historical_timestamp(target_bar)
+        if target_timestamp is None:
+            continue
+        history_start = max(0, target_index - HISTORICAL_LOF_HISTORY_WINDOW)
+        history_rows = rows[history_start:target_index]
+        if len(history_rows) < min_history:
+            continue
+
+        try:
+            history_matrix = np.asarray(
+                [row["features"] for row in history_rows], dtype=float
+            )
+            target_vector = np.asarray(
+                target_row["features"], dtype=float
+            ).reshape(1, -1)
+            if not np.all(np.isfinite(history_matrix)) or not np.all(
+                np.isfinite(target_vector)
+            ):
+                continue
+
+            combined = np.vstack([history_matrix, target_vector])
+            if np.all(np.ptp(combined, axis=0) == 0):
+                continue
+
+            scaler = StandardScaler().fit(history_matrix)
+            model = LocalOutlierFactor(
+                n_neighbors=LOF_DEFAULT_NEIGHBORS,
+                novelty=True,
+                contamination=LOF_DEFAULT_CONTAMINATION,
+            )
+            model.fit(scaler.transform(history_matrix))
+            score = float(
+                -model.score_samples(scaler.transform(target_vector))[0]
+            )
+            threshold = float(-model.offset_)
+            decision_value = float(
+                model.decision_function(scaler.transform(target_vector))[0]
+            )
+        except Exception:
+            # A single numerical failure must not invent a point or break the
+            # analysis response. The detector's envelope still reports scope.
+            continue
+
+        evaluated += 1
+        if decision_value >= 0:
+            continue
+
+        points.append(
+            _historical_point(
+                target_bar,
+                score=round(score, 4),
+                threshold=round(threshold, 4),
+                score_label="LOF score",
+                values={
+                    name: round(float(value), 4)
+                    for name, value in zip(
+                        LOF_FEATURES, target_row["features"]
+                    )
+                },
+                signal="density_outlier",
+                explanation=(
+                    f"LOF flagged {target_timestamp} as a density outlier: "
+                    f"score {score:.2f} is above the threshold {threshold:.2f} "
+                    f"(n_neighbors={LOF_DEFAULT_NEIGHBORS}, "
+                    f"contamination={LOF_DEFAULT_CONTAMINATION:g}). The model "
+                    f"was fitted on {len(history_rows)} earlier feature rows "
+                    "only, so no future data was used. This is a statistical "
+                    "outlier, not proof of manipulation."
+                ),
+            )
+        )
+
+    if evaluated == 0:
+        return _historical_detector(
+            available=False,
+            points=[],
+            evaluated_bars=0,
+            method=LOF_METHOD,
+            reason=(
+                "LOF historical evaluation could not fit a model with varying "
+                "features on the available prior observations."
+            ),
+        )
+
+    return _historical_detector(
+        available=True,
+        points=points,
+        evaluated_bars=evaluated,
+        method=(
+            f"Walk-forward LOF using the existing {LOF_DEFAULT_NEIGHBORS}-"
+            f"neighbour and {LOF_DEFAULT_CONTAMINATION:g} contamination "
+            "settings. Each target is scored by a StandardScaler and novelty "
+            f"LOF fitted on up to {HISTORICAL_LOF_HISTORY_WINDOW} preceding "
+            "feature rows only. The most recent "
+            f"{HISTORICAL_LOF_MAX_TARGETS} scorable bars are evaluated."
+        ),
+        limitations=[
+            "LOF historical markers are limited to a bounded recent "
+            "walk-forward scan to keep the endpoint responsive.",
+            "The latest complete bar's separate card may use a longer history "
+            "than the historical walk-forward points.",
+        ],
+    )
+
+
+def _latest_only_detector(
+    *, name: str, method: str, limitation: str
+) -> dict[str, Any]:
+    """Describe a detector that only supports the latest complete bar."""
+    return _historical_detector(
+        available=False,
+        points=[],
+        evaluated_bars=0,
+        method=method,
+        reason=(
+            f"{name} remains a latest-complete-bar check. No historical series "
+            "is returned or inferred."
+        ),
+        scope="latest_only",
+        limitations=[limitation],
+    )
+
+
+def calculate_historical_anomalies(
+    bars: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return timestamped anomaly points that can be computed causally.
+
+    Supported historical sources are volume spike, volatility anomaly,
+    volume-price divergence and a bounded walk-forward LOF. Autoencoder and
+    Transformer remain latest-only because their existing training loops would
+    be prohibitively expensive to repeat for every historical candle. Every
+    returned point is tied to a real bar timestamp and every score/threshold is
+    taken from the corresponding existing detector.
+    """
+    source = bars if isinstance(bars, list) else []
+    detectors = {
+        "volume_spike": _historical_volume_spikes(source),
+        "volatility_anomaly": _historical_volatility_anomalies(source),
+        "volume_price_divergence": _historical_divergences(source),
+        "lof_anomaly": _historical_lof(source),
+        "autoencoder_anomaly": _latest_only_detector(
+            name="Autoencoder",
+            method=AE_METHOD,
+            limitation=(
+                "Autoencoder historical markers are omitted rather than "
+                "retraining the neural network for every candle. Its latest "
+                "card is still computed by the existing endpoint."
+            ),
+        ),
+        "transformer_anomaly": _latest_only_detector(
+            name="Transformer",
+            method=TR_METHOD,
+            limitation=(
+                "Transformer historical markers are omitted rather than "
+                "retraining the sequence model for every candle. Its latest "
+                "card is still computed by the existing endpoint, using a "
+                "bounded recent history and reduced epoch budget on extended "
+                "timeframes."
+            ),
+        ),
+    }
+
+    return {
+        "available": any(
+            block.get("available") is True for block in detectors.values()
+        ),
+        "scope": HISTORICAL_SCOPE_NOTE,
+        "bar_count": len(source),
+        "detectors": detectors,
+        "latest_only_detectors": [
+            "autoencoder_anomaly",
+            "transformer_anomaly",
+        ],
+        "limitations": list(HISTORICAL_LIMITATIONS),
     }
