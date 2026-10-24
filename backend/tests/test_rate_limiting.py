@@ -1,4 +1,4 @@
-﻿"""Tests for the per-IP rate limiter (RateLimitStore, RateLimitMiddleware,
+"""Tests for the per-IP rate limiter (RateLimitStore, RateLimitMiddleware,
 and _classify_rate_limit).
 
 These tests do NOT open sockets or touch live data.  The store tests exercise
@@ -83,6 +83,9 @@ class TestRateLimitStoreBucketIsolation:
 class TestClassifyRateLimit:
     def test_health_endpoint_is_exempt(self):
         assert _classify_rate_limit("/api/health", "GET") is None
+        assert _classify_rate_limit("/api/health", "HEAD") is None
+        assert _classify_rate_limit("/health", "GET") is None
+        assert _classify_rate_limit("/health", "HEAD") is None
 
     def test_options_preflight_is_exempt(self):
         assert _classify_rate_limit("/api/market/history", "OPTIONS") is None

@@ -22,6 +22,21 @@ class TestHealth:
         assert data["status"] == "success"
         assert data["message"] == "Clean Data Flow backend is running"
 
+    def test_health_endpoint_head(self):
+        response = client.head("/api/health")
+        assert response.status_code == 200
+        assert response.headers.get("content-type") == "application/json"
+        assert response.text == ""
+
+    def test_health_alias_endpoint(self):
+        res_get = client.get("/health")
+        assert res_get.status_code == 200
+        assert res_get.json()["status"] == "success"
+
+        res_head = client.head("/health")
+        assert res_head.status_code == 200
+        assert res_head.text == ""
+
 
 class TestMarketHistorySuccess:
     @patch("main.fetch_history")
@@ -672,4 +687,9 @@ class TestStaticFileServing:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
+
+    def test_health_api_route_head_takes_precedence_over_static(self):
+        response = client.head("/api/health")
+        assert response.status_code == 200
+        assert response.text == ""
 

@@ -151,9 +151,9 @@ _RL_API_DEFAULT = (120, 60)         # everything else under /api/
 def _classify_rate_limit(path: str, method: str):
     """Return (bucket, limit, window_seconds) for a request, or None when the
     request is exempt from rate limiting."""
-    if not path.startswith("/api/"):
+    if not path.startswith("/api/") and path != "/health":
         return None                      # static pages and mounts never count
-    if path == "/api/health":
+    if path in ("/api/health", "/health"):
         return None                      # keep the health contract open for monitors
     if method == "OPTIONS":
         return None                      # CORS preflights stay open
@@ -285,7 +285,7 @@ if _allowed_origins == ["*"]:
         allow_origins=[],
         allow_origin_regex=_LOCAL_ORIGIN_RE.pattern,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=["*"],
     )
 else:
@@ -294,7 +294,7 @@ else:
         # Explicitly listed origins are echoed when credentials are included.
         allow_origins=_allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE"],
+        allow_methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -356,7 +356,8 @@ def _fetch_nse(path: str) -> Any:
     return data
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "success",
