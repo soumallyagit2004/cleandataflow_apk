@@ -137,6 +137,62 @@ test("reconcileSelection keeps the period and falls back to daily bars", () => {
   assert.equal(unchanged.interval, "1d");
 });
 
+test("selectionFromParams prefers the window parameter", () => {
+  const linked = CU.selectionFromParams(
+    new URLSearchParams("?symbol=tcs&exchange=bse&window=max")
+  );
+  assert.equal(linked.window, "max");
+  assert.equal(linked.period, "max");
+  assert.equal(linked.interval, "1d");
+  assert.deepEqual(linked.notes, []);
+
+  // An unknown window falls back to the legacy period, not to a guess.
+  const unknownWindow = CU.selectionFromParams(
+    new URLSearchParams("?symbol=infy&window=99x&period=6mo")
+  );
+  assert.equal(unknownWindow.window, "6mo");
+  assert.equal(unknownWindow.period, "6mo");
+  assert.equal(unknownWindow.interval, "1d");
+  assert.ok(unknownWindow.notes.some((note) => /Unknown window/.test(note)));
+
+  // A window parameter overrides a stale legacy period on the same link.
+  const windowWins = CU.selectionFromParams(
+    new URLSearchParams("?symbol=infy&window=1mo&period=5y")
+  );
+  assert.equal(windowWins.window, "1mo");
+  assert.equal(windowWins.period, "1mo");
+  assert.equal(windowWins.interval, "1d");
+  assert.deepEqual(windowWins.notes, []);
+});
+
+test("legacy period/interval links map onto windows with honest notes", () => {
+  const twoYears = CU.selectionFromParams(
+    new URLSearchParams("?symbol=tcs&period=2y")
+  );
+  assert.equal(twoYears.window, "max");
+  assert.equal(twoYears.period, "max");
+  assert.equal(twoYears.interval, "1d");
+  assert.ok(twoYears.notes.some((note) => /2 years/.test(note)));
+
+  const weekly = CU.selectionFromParams(
+    new URLSearchParams("?symbol=tcs&period=1y&interval=1wk")
+  );
+  assert.equal(weekly.window, "1y");
+  assert.equal(weekly.period, "1y");
+  assert.equal(weekly.interval, "1d", "windows always use daily bars");
+  assert.ok(
+    weekly.notes.some((note) => /daily bars/.test(note)),
+    "the ignored interval is disclosed"
+  );
+
+  const intraday = CU.selectionFromParams(
+    new URLSearchParams("?symbol=infy&period=1mo&interval=15m")
+  );
+  assert.equal(intraday.window, "1mo");
+  assert.equal(intraday.interval, "1d");
+  assert.ok(intraday.notes.some((note) => /daily bars/.test(note)));
+});
+
 test("validateSymbol normalizes case and rejects backend-invalid characters", () => {
   assert.deepEqual(CU.validateSymbol(" reliance "), {
     valid: true,
@@ -155,17 +211,20 @@ test("selectionFromParams reads deep links and reconciles invalid pairs", () => 
   );
   assert.equal(basic.symbol, "RELIANCE");
   assert.equal(basic.exchange, "NSE");
+  assert.equal(basic.window, "3mo");
   assert.equal(basic.period, "3mo");
   assert.equal(basic.interval, "1d");
   assert.deepEqual(basic.notes, []);
 
   const full = CU.selectionFromParams(
-    new URLSearchParams("?symbol=tcs&exchange=bse&period=1y&interval=1wk")
+    new URLSearchParams("?symbol=tcs&exchange=bse&window=6mo")
   );
   assert.equal(full.symbol, "TCS");
   assert.equal(full.exchange, "BSE");
-  assert.equal(full.period, "1y");
-  assert.equal(full.interval, "1wk");
+  assert.equal(full.window, "6mo");
+  assert.equal(full.period, "6mo");
+  assert.equal(full.interval, "1d");
+  assert.deepEqual(full.notes, []);
 
   const incompatible = CU.selectionFromParams(
     new URLSearchParams("?symbol=INFY&period=3mo&interval=1m")
@@ -178,9 +237,68 @@ test("selectionFromParams reads deep links and reconciles invalid pairs", () => 
     new URLSearchParams("?symbol=INFY&exchange=NYSE&period=forever&interval=2h")
   );
   assert.equal(unknown.exchange, "NSE");
+  assert.equal(unknown.window, "3mo");
   assert.equal(unknown.period, "3mo");
   assert.equal(unknown.interval, "1d");
   assert.ok(unknown.notes.length >= 3);
+});
+
+test("HISTORICAL_WINDOWS map to provider-supported daily pairs", () => {
+  assert.deepEqual(
+    CU.HISTORICAL_WINDOWS.map((option) => option.window),
+    ["1mo", "3mo", "6mo", "1y", "max"]
+  );
+  for (const option of CU.HISTORICAL_WINDOWS) {
+    assert.equal(option.interval, "1d");
+    assert.ok(CU.isCompatible(option.period, option.interval));
+  }
+
+  assert.deepEqual(CU.windowForId("6mo"), {
+    window: "6mo",
+    period: "6mo",
+    interval: "1d",
+    label: "6 months",
+  });
+  assert.equal(CU.windowForId("max").period, "max");
+  assert.equal(CU.windowForId(" 1y ").window, "1y", "surrounding spaces are trimmed");
+  assert.equal(CU.windowForId("nope"), null);
+  assert.equal(CU.windowForId(null), null);
+  assert.equal(CU.windowForId(""), null);
+});
+
+test("windowLabel keeps human labels for windows and legacy periods", () => {
+  assert.equal(CU.windowLabel("1mo"), "1 month");
+  assert.equal(CU.windowLabel("max"), "Maximum available");
+  assert.equal(CU.windowLabel("5y"), "5 years", "legacy periods keep their label");
+  assert.equal(CU.windowLabel("12x"), "12x", "unknown ids fall back to their raw label");
+});
+
+test("windowFromPeriod maps legacy provider periods to windows", () => {
+  for (const id of ["1mo", "3mo", "6mo", "1y", "max"]) {
+    const same = CU.windowFromPeriod(id);
+    assert.equal(same.window, id);
+    assert.equal(same.changed, false);
+    assert.equal(same.message, "");
+  }
+
+  const twoYears = CU.windowFromPeriod("2y");
+  assert.equal(twoYears.window, "max");
+  assert.equal(twoYears.changed, true);
+  assert.match(twoYears.message, /2 years/);
+  assert.match(twoYears.message, /Maximum available/);
+
+  assert.equal(CU.windowFromPeriod("5y").window, "max");
+  assert.equal(CU.windowFromPeriod("10y").window, "max");
+  assert.equal(CU.windowFromPeriod("ytd").window, "1y");
+  assert.equal(CU.windowFromPeriod("1d").window, "1mo");
+  assert.equal(CU.windowFromPeriod("5d").window, "1mo");
+  assert.match(CU.windowFromPeriod("5d").message, /5 days/);
+  assert.match(CU.windowFromPeriod("5d").message, /1 month/);
+
+  const unknown = CU.windowFromPeriod("forever");
+  assert.equal(unknown.window, "3mo");
+  assert.equal(unknown.changed, true);
+  assert.match(unknown.message, /forever/);
 });
 
 test("buildHistoryUrl sends the selected parameters", () => {

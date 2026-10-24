@@ -97,6 +97,64 @@
     max: 10,
   };
 
+  // The one Historical Window select on the analysis page. Each option maps to
+  // a provider-supported (period, interval) pair; every window uses daily bars
+  // so analysis is always computed on the same complete daily bars it charts.
+  const HISTORICAL_WINDOWS = Object.freeze([
+    { window: "1mo", period: "1mo", interval: "1d", label: "1 month" },
+    { window: "3mo", period: "3mo", interval: "1d", label: "3 months" },
+    { window: "6mo", period: "6mo", interval: "1d", label: "6 months" },
+    { window: "1y", period: "1y", interval: "1d", label: "1 year" },
+    { window: "max", period: "max", interval: "1d", label: "Maximum available" },
+  ]);
+
+  // Shared deep links created before the single-window design can still name
+  // periods that are not offered as windows. Each maps to the closest window
+  // that covers the same or more history; daily bars are always used.
+  const LEGACY_WINDOW_FALLBACKS = Object.freeze({
+    "1d": "1mo",
+    "5d": "1mo",
+    ytd: "1y",
+    "2y": "max",
+    "5y": "max",
+    "10y": "max",
+  });
+
+  function windowForId(id) {
+    const key = String(id == null ? "" : id).trim();
+    return HISTORICAL_WINDOWS.find((option) => option.window === key) || null;
+  }
+
+  function windowLabel(id) {
+    const option = windowForId(id);
+    if (option) return option.label;
+    // Legacy periods keep their human label even when they are no longer
+    // selectable windows.
+    return periodLabel(id);
+  }
+
+  function windowFromPeriod(period) {
+    const key = String(period == null ? "" : period).trim();
+    if (windowForId(key)) {
+      return { window: key, changed: false, message: "" };
+    }
+    const mapped = LEGACY_WINDOW_FALLBACKS[key];
+    if (mapped) {
+      return {
+        window: mapped,
+        changed: true,
+        message:
+          `${periodLabel(key)} is no longer a selectable window; the ` +
+          `${windowLabel(mapped)} daily window is used instead.`,
+      };
+    }
+    return {
+      window: "3mo",
+      changed: true,
+      message: `Unknown period "${key}" was ignored; the 3 months daily window is used.`,
+    };
+  }
+
   // Latest-bar card configuration. Kept separate from marker configuration so
   // adding a historical marker source never duplicates an analysis card.
   const DETECTOR_CONFIG = Object.freeze([
@@ -1064,11 +1122,15 @@
 
   /**
    * Read and reconcile a deep link such as
-   * ?symbol=RELIANCE&exchange=NSE&period=6mo&interval=1d
+   * ?symbol=RELIANCE&exchange=NSE&window=6mo
+   *
+   * `window` selects one of HISTORICAL_WINDOWS. Legacy links that still carry
+   * period/interval are honoured and mapped onto the closest daily window so
+   * old shared links keep working.
    */
   function selectionFromParams(params, defaults) {
     const fallback = Object.assign(
-      { exchange: "NSE", period: "3mo", interval: "1d" },
+      { exchange: "NSE", window: "3mo" },
       defaults || {}
     );
     const notes = [];
@@ -1077,30 +1139,57 @@
     let exchange = String(params.get("exchange") || fallback.exchange)
       .trim()
       .toUpperCase();
-    let period = String(params.get("period") || fallback.period).trim();
-    let interval = String(params.get("interval") || fallback.interval).trim();
 
     if (exchange !== "NSE" && exchange !== "BSE") {
       notes.push(`Unknown exchange "${exchange}" was ignored.`);
       exchange = fallback.exchange;
     }
-    if (!PERIODS.includes(period)) {
-      notes.push(`Unknown period "${period}" was ignored.`);
-      period = fallback.period;
-    }
-    if (!INTERVALS.includes(interval)) {
-      notes.push(`Unknown interval "${interval}" was ignored.`);
-      interval = fallback.interval;
-    }
 
-    const reconciled = reconcileSelection(period, interval, "initial");
-    if (reconciled.changed) notes.push(reconciled.message);
+    // A live window link wins; legacy period/interval links are mapped.
+    const windowEntry = windowForId(params.get("window"));
+    let window = null;
+    let period;
+    let interval;
+
+    if (windowEntry) {
+      window = windowEntry.window;
+      period = windowEntry.period;
+      interval = windowEntry.interval;
+    } else {
+      if (params.get("window") !== null) {
+        notes.push(`Unknown window "${params.get("window")}" was ignored.`);
+      }
+
+      const legacyPeriod = String(
+        params.get("period") || fallback.period || fallback.window
+      ).trim();
+      const legacyInterval = String(
+        params.get("interval") || "1d"
+      ).trim();
+
+      const mapped = windowFromPeriod(
+        PERIODS.includes(legacyPeriod) ? legacyPeriod : fallback.window || "3mo"
+      );
+      window = mapped.window;
+      period = mapped.window;
+      interval = windowForId(mapped.window).interval;
+      if (mapped.changed) notes.push(mapped.message);
+      if (!PERIODS.includes(legacyPeriod)) {
+        notes.push(`Unknown period "${legacyPeriod}" was ignored.`);
+      }
+      if (legacyInterval !== "1d") {
+        notes.push(
+          "Analysis windows use daily bars; the linked interval was ignored."
+        );
+      }
+    }
 
     return {
       symbol,
       exchange,
-      period: reconciled.period,
-      interval: reconciled.interval,
+      window,
+      period,
+      interval,
       notes,
     };
   }
@@ -1111,6 +1200,7 @@
     PERIOD_LABELS,
     INTERVAL_LABELS,
     TIMEFRAME_OPTIONS,
+    HISTORICAL_WINDOWS,
     DETECTOR_CONFIG,
     MARKER_DETECTOR_CONFIG,
     isIntraday,
@@ -1120,6 +1210,9 @@
     isCompatible,
     periodLabel,
     intervalLabel,
+    windowForId,
+    windowLabel,
+    windowFromPeriod,
     closestSupportedPeriod,
     reconcileSelection,
     parseTimestamp,

@@ -317,6 +317,96 @@ class TestDivergence:
         assert result["signal"] == "aligned"
 
 
+class TestDivergenceWindowRegression:
+    """Regression tests for the aligned change window.
+
+    The change must be measured from the first to the last bar of the trailing
+    eligible window, so the latest eligible bar is evaluated, price and volume
+    share the same two endpoint bars, and zero-volume bars never shift one
+    horizon relative to the other.
+    """
+
+    def _make_bars(self, closes, volumes, timestamps=True):
+        bars = [
+            {
+                "close": c,
+                "high": c + 5,
+                "low": c - 5,
+                "open": c + 2,
+                "volume": v,
+            }
+            for c, v in zip(closes, volumes)
+        ]
+        if timestamps:
+            for i, bar in enumerate(bars):
+                bar["timestamp"] = f"2026-01-{i + 1:02d}T09:15:00+00:00"
+        return bars
+
+    def test_latest_bar_is_evaluated(self):
+        """Flat price and flat volume until a move exactly at the latest bar.
+
+        The old window (`values[-period-1:-1]`) ended one bar early and would
+        report a neutral 0%/0% result here; the corrected window must report
+        the latest bar's move: price down, volume up -> bullish.
+        """
+        closes = [110.0] * 20 + [100.0]
+        volumes = [1000.0] * 20 + [2000.0]
+        bars = self._make_bars(closes, volumes)
+        result = calculate_divergence(bars, period=5)
+        assert result["available"] is True
+        expected_price = round((100.0 - 110.0) / 110.0 * 100, 2)
+        assert result["price_change_percent"] == pytest.approx(expected_price, abs=1e-9)
+        assert result["volume_change_percent"] == pytest.approx(100.0)
+        assert result["signal"] == "bullish"
+        # The evaluated bar is the latest returned bar, not the previous one.
+        assert result["evaluated_timestamp"] == "2026-01-21T09:15:00+00:00"
+
+    def test_price_and_volume_share_the_same_window_bars(self):
+        """Zero-volume bars are skipped for both series together.
+
+        With zero volume on every other bar, the eligible endpoints for price
+        and volume are the same two bars. A misaligned implementation would
+        report a volume change measured over a different horizon.
+        """
+        closes = [100.0, 100.0, 102.0, 100.0, 104.0, 100.0, 106.0, 100.0, 108.0, 100.0, 110.0]
+        volumes = [1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0, 0.0, 1000.0]
+        bars = self._make_bars(closes, volumes)
+        result = calculate_divergence(bars, period=5)
+        assert result["available"] is True
+        # Same eligible endpoints for both series: closes 100 -> 110 (+10%),
+        # volumes 1000 -> 1000 (0%) across the same eligible bars.
+        assert result["price_change_percent"] == pytest.approx(10.0)
+        assert result["volume_change_percent"] == pytest.approx(0.0)
+        assert result["evaluated_timestamp"] == "2026-01-11T09:15:00+00:00"
+
+    def test_trailing_zero_volume_bar_is_not_scored_as_the_latest(self):
+        """A zero-volume latest bar is ineligible; both series move back with it.
+
+        The latest eligible bar (22nd, volume 0) must be excluded for price AND
+        volume alike: the endpoints become bars 15..21, so volume contributed
+        by the last bar's rise is measured to bar 21, never to a bar-index mix.
+        """
+        closes = [100.0] * 20 + [105.0, 110.0]
+        volumes = [1000.0] * 20 + [1500.0, 0.0]
+        bars = self._make_bars(closes, volumes)
+        result = calculate_divergence(bars, period=5)
+        assert result["available"] is True
+        assert result["price_change_percent"] == pytest.approx(5.0)
+        assert result["volume_change_percent"] == pytest.approx(50.0)
+        assert result["signal"] == "aligned"
+        assert result["evaluated_timestamp"] == "2026-01-21T09:15:00+00:00"
+
+    def test_insufficient_eligible_observations_with_mixed_data(self):
+        """Eligibility counts usable close+positive-volume pairs, not just bars."""
+        closes = [100.0] * 12
+        volumes = [1000.0] * 8 + [0.0] * 4  # last four bars have zero volume
+        bars = self._make_bars(closes, volumes)
+        result = calculate_divergence(bars, period=10)  # needs 11 eligible points
+        assert result["available"] is False
+        assert result["signal"] is None
+        assert "8 usable price+volume observations" in result["explanation"]
+
+
 class TestVolumeSpike:
     """Volume Spike analysis using real OHLCV bars."""
 
@@ -338,13 +428,14 @@ class TestVolumeSpike:
         """Latest volume is much higher than the baseline average."""
         bars = self._make_bars(
             [100, 101, 102, 103, 104, 105, 106, 107, 108, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119],
-            volumes=[1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 1500, 1600, 1700, 1700, 1800, 1900, 1900, 2000, 3000, 4000]
+            volumes=[1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000, 1500, 1600, 1700, 1700, 1800, 1900, 1900, 2000, 3000, 6000]
         )
         result = calculate_volume_spike(bars, period=5)
         assert result["available"] is True
-        assert result["latest_volume"] == 4000
-        assert result["baseline_average"] > 1000  # average of first 19 bars
-        assert result["volume_ratio"] > 1.0
+        assert result["latest_volume"] == 6000
+        # Baseline is exactly the 5 bars before the latest: (1800+1900+1900+2000+3000)/5
+        assert result["baseline_average"] == pytest.approx(2120.0)
+        assert result["volume_ratio"] == pytest.approx(round(6000 / 2120, 4), abs=1e-9)
         assert result["percent_above_baseline"] > 0
         assert result["signal"] == "spike"
 
@@ -386,6 +477,76 @@ class TestVolumeSpike:
         result = calculate_volume_spike(bars, period=7)
         assert result["available"] is False
         assert result["explanation"] is not None
+
+
+class TestVolumeSpikeBaselineRegression:
+    """Regression tests pinning the `period`-bar baseline window.
+
+    The baseline must be the average of exactly the *period* bars before the
+    latest bar, never the latest bar itself and never the whole returned
+    history (the old bug made the baseline grow with the fetched window).
+    """
+
+    def _make_bars(self, volumes):
+        return [
+            {
+                "close": 100.0 + i,
+                "high": 105.0 + i,
+                "low": 95.0 + i,
+                "open": 102.0 + i,
+                "volume": v,
+            }
+            for i, v in enumerate(volumes)
+        ]
+
+    def test_different_periods_use_different_baseline_windows(self):
+        """period=5 and period=10 must average different trailing volumes."""
+        volumes = [float(100 * (i + 1)) for i in range(30)]  # 100, 200, ..., 3000
+        bars = self._make_bars(volumes)
+
+        result_p5 = calculate_volume_spike(bars, period=5)
+        result_p10 = calculate_volume_spike(bars, period=10)
+
+        # period=5 baseline: volumes[-6:-1] = [2500, 2600, 2700, 2800, 2900]
+        assert result_p5["baseline_average"] == pytest.approx(2700.0)
+        # period=10 baseline: volumes[-11:-1] = [2000, 2100, ..., 2900]
+        assert result_p10["baseline_average"] == pytest.approx(2450.0)
+        assert result_p5["baseline_average"] != result_p10["baseline_average"]
+        # Same latest bar in both cases.
+        assert result_p5["latest_volume"] == result_p10["latest_volume"] == 3000.0
+
+    def test_baseline_grows_nothing_beyond_period_bars(self):
+        """Adding older history must not change the baseline for the same period."""
+        # Eleven shared trailing bars: ten of them (all but the latest) are the
+        # period=10 baseline in both bars lists, so older history is excluded.
+        trailing = [float(10 * (i + 1)) for i in range(11)]  # 10, 20, ..., 110
+        bars_short = self._make_bars([500.0] * 6 + trailing)
+        bars_long = self._make_bars([9000.0] * 30 + trailing)
+
+        result_short = calculate_volume_spike(bars_short, period=10)
+        result_long = calculate_volume_spike(bars_long, period=10)
+
+        # Baseline = mean(10, 20, ..., 100); older bars never contribute.
+        assert result_short["baseline_average"] == pytest.approx(55.0)
+        assert result_long["baseline_average"] == pytest.approx(55.0)
+
+    def test_latest_bar_excluded_from_baseline(self):
+        """A huge latest volume never enters its own baseline."""
+        volumes = [100.0] * 25 + [99999.0]
+        bars = self._make_bars(volumes)
+        result = calculate_volume_spike(bars, period=10)
+        assert result["available"] is True
+        assert result["latest_volume"] == 99999.0
+        assert result["baseline_average"] == pytest.approx(100.0)
+
+    def test_zero_volumes_inside_the_window_are_skipped(self):
+        """Zero volumes inside the baseline window are filtered, not counted as 0."""
+        volumes = [100.0] * 10 + [0.0] * 5 + [100.0] * 10  # 25 bars
+        bars = self._make_bars(volumes)
+        result = calculate_volume_spike(bars, period=10)
+        assert result["available"] is True
+        # Baseline window = 10 bars before latest = one zero + nine 100s.
+        assert result["baseline_average"] == pytest.approx(100.0)
 
 
 class TestVolatilityAnomaly:
@@ -1216,7 +1377,7 @@ class TestHistoricalWalkForwardEquivalence:
                     signal="spike",
                     explanation=(
                         f"Volume on {bar.get('timestamp')} was {ratio}x the average "
-                        "of all preceding positive volumes in the returned series; "
+                        "of the 20 bars before it in the returned series; "
                         "the existing spike threshold is > 2.0x. This is unusual "
                         "volume, not proof of manipulation."
                     ),

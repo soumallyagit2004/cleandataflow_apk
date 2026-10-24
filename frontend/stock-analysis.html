@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261023c">
+  <link rel="stylesheet" href="style.css?v=20261024a">
   <script>
     try {
       if (localStorage.getItem("clean-data-theme") === "light") {
@@ -44,7 +44,6 @@
       <li><a href="index.html">Home</a></li>
       <li><a href="stocks.html">Stocks</a></li>
       <li class="active"><a href="stock-analysis.html" class="active" aria-current="page">Stock Analysis</a></li>
-      <li><a href="wishlist.html">Wishlist</a></li>
     </ul>
 
     <div class="nav-actions">
@@ -73,21 +72,24 @@
       <h1>Stock Analysis</h1>
       <p class="analysis-lede">
         Search an NSE or BSE stock to inspect its recent price and volume history.
-        Choose an exchange, period and interval, then run the analysis.
+        Choose an exchange, then run the analysis. The Historical Window control in
+        the chart header chooses how much history is loaded.
         Indicators and anomaly checks use only the bars the provider returns — source and
         freshness are shown with every result. This is historical data, not a live tick feed
         or investment advice.
       </p>
     </header>
 
-    <!-- Search stage: exchange, period and interval are visible up front. -->
+    <!-- Search stage: symbol and exchange are visible up front; the historical
+         window lives in the chart header. -->
     <section id="searchStage" class="analysis-panel search-stage" aria-labelledby="searchHeading">
       <div class="search-head">
         <div>
           <span class="eyebrow">New analysis</span>
           <h2 id="searchHeading" class="section-heading">Analyse a stock</h2>
           <p class="section-note">
-            Start typing a company name or symbol, then confirm the exchange and window.
+            Start typing a company name or symbol, then confirm the exchange.
+            The Historical Window control in the chart header sets how much history is loaded.
           </p>
         </div>
         <span class="search-badge">Real data only</span>
@@ -124,56 +126,6 @@
             <select id="exchangeSelect" name="exchange">
               <option value="NSE" selected>NSE</option>
               <option value="BSE">BSE</option>
-            </select>
-          </div>
-
-          <div class="field field-period">
-            <label for="periodSelect" data-tooltip="How much history to request. Only provider-supported combinations are accepted.">Period</label>
-            <select id="periodSelect" name="period">
-              <optgroup label="Days">
-                <option value="1d">1 day</option>
-                <option value="5d">5 days</option>
-              </optgroup>
-              <optgroup label="Months">
-                <option value="1mo">1 month</option>
-                <option value="3mo" selected>3 months</option>
-                <option value="6mo">6 months</option>
-              </optgroup>
-              <optgroup label="Years">
-                <option value="1y">1 year</option>
-                <option value="2y">2 years</option>
-                <option value="5y">5 years</option>
-                <option value="10y">10 years</option>
-              </optgroup>
-              <optgroup label="Other">
-                <option value="ytd">Year to date</option>
-                <option value="max">Maximum</option>
-              </optgroup>
-            </select>
-          </div>
-
-          <div class="field field-interval">
-            <label for="intervalSelect" data-tooltip="Bar size. Intraday intervals have shorter provider limits and are not live ticks.">Interval</label>
-            <select id="intervalSelect" name="interval">
-              <optgroup label="Minutes">
-                <option value="1m">1 minute</option>
-                <option value="2m">2 minutes</option>
-                <option value="5m">5 minutes</option>
-                <option value="15m">15 minutes</option>
-                <option value="30m">30 minutes</option>
-                <option value="60m">60 minutes</option>
-                <option value="90m">90 minutes</option>
-              </optgroup>
-              <optgroup label="Hours">
-                <option value="1h">1 hour</option>
-              </optgroup>
-              <optgroup label="Days, weeks and months">
-                <option value="1d" selected>1 day</option>
-                <option value="5d">5 days</option>
-                <option value="1wk">1 week</option>
-                <option value="1mo">1 month</option>
-                <option value="3mo">3 months</option>
-              </optgroup>
             </select>
           </div>
         </div>
@@ -247,9 +199,10 @@
         <span class="eyebrow">Ready when you are</span>
         <h2 id="preAnalysisTitle">Start with a symbol</h2>
         <p>
-          Enter a company or ticker above, choose the exchange, period and interval, then select
-          <strong>Analyse Stock</strong>. The decorative chart on the left contains no prices and
-          is only a placeholder for the real response.
+          Enter a company or ticker above, choose the exchange, then select
+          <strong>Analyse Stock</strong>. The Historical Window control in the chart
+          header changes how much history is loaded. The decorative chart on the
+          left contains no prices and is only a placeholder for the real response.
         </p>
         <ul class="pre-tags" aria-label="Analysis capabilities">
           <li>Real OHLCV</li>
@@ -282,7 +235,7 @@
         <div class="rs-stat">
           <span>Window</span>
           <strong id="resultWindow">—</strong>
-          <small>Requested period · interval</small>
+          <small>Historical window · bars</small>
         </div>
         <div class="rs-stat rs-source">
           <span>Source</span>
@@ -290,19 +243,6 @@
           <small id="resultFetched">Fetched time unavailable</small>
           <span id="resultFreshness" class="freshness-pill">Historical data · not live</span>
         </div>
-      </section>
-
-      <section id="timeframePanel" class="timeframe-panel" aria-labelledby="timeframeHeading">
-        <div class="timeframe-copy">
-          <span class="eyebrow">Historical window</span>
-          <h2 id="timeframeHeading">Timeframe</h2>
-          <p id="timeframeHint">
-            Reload the same stock with a different supported window. The current chart stays
-            visible until the new response arrives.
-          </p>
-        </div>
-        <div id="timeframeControls" class="timeframe-controls" role="group" aria-label="Historical timeframe"></div>
-        <p id="timeframeStatus" class="timeframe-status" role="status" aria-live="polite"></p>
       </section>
 
       <section id="metaPanel" class="analysis-panel" aria-labelledby="metaHeading">
@@ -326,10 +266,21 @@
             <span class="eyebrow">Price history</span>
             <h2 id="chartHeading">Price &amp; volume</h2>
             <p class="panel-subtitle">
-              Actual returned OHLC bars. Scroll to zoom, drag to pan, and hover for OHLCV details.
+              Actual returned OHLC bars for the selected historical window.
+              Scroll to zoom, drag to pan, and hover for OHLCV details.
             </p>
           </div>
           <div class="chart-controls" role="group" aria-label="Chart controls">
+            <label class="window-field">
+              <span class="window-label">Historical window</span>
+              <select id="windowSelect" title="How much history the chart and analysis load. Every window uses daily bars.">
+                <option value="1mo">1 month</option>
+                <option value="3mo" selected>3 months</option>
+                <option value="6mo">6 months</option>
+                <option value="1y">1 year</option>
+                <option value="max">Maximum available</option>
+              </select>
+            </label>
             <div class="segmented" role="group" aria-label="Price display">
               <button type="button" id="modeCandles" class="chart-btn active" aria-pressed="true">Candles</button>
               <button type="button" id="modeLine" class="chart-btn" aria-pressed="false">Line</button>
@@ -339,6 +290,7 @@
             <button type="button" id="resetZoom" class="chart-btn">Reset zoom</button>
           </div>
         </div>
+        <p id="windowStatus" class="window-status hidden" role="status" aria-live="polite"></p>
 
         <div id="chartLegend" class="chart-legend" aria-live="polite">
           <span class="legend-hint">Hover the chart for OHLCV details.</span>
@@ -459,9 +411,9 @@
   </footer>
 
   <script src="config.js"></script>
-  <script src="script.js?v=20261023c"></script>
+  <script src="script.js?v=20261024b"></script>
   <script src="vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="chart-utils.js?v=20261023c"></script>
-  <script src="analysis.js?v=20261023c"></script>
+  <script src="chart-utils.js?v=20261024a"></script>
+  <script src="analysis.js?v=20261024a"></script>
 </body>
 </html>

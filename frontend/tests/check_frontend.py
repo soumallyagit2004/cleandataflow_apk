@@ -43,17 +43,14 @@ def main() -> int:
         "analysisForm",
         "symbolInput",
         "exchangeSelect",
-        "periodSelect",
-        "intervalSelect",
+        "windowSelect",
+        "windowStatus",
         "analyzeBtn",
         "analysisStatus",
         "selectionNote",
         "metaPanel",
         "metaList",
         "metaBadge",
-        "timeframePanel",
-        "timeframeControls",
-        "timeframeStatus",
         "chartPanel",
         "chartLegend",
         "chartCanvasWrap",
@@ -122,10 +119,11 @@ def main() -> int:
         "renderAnomalyLegend",
         "runAnalysis",
         "timeframesForInterval",
+        "windowForId",
         "selectionFromParams",
         "syncUrl",
         "markerTooltipHtml",
-        "setTimeframeStatus",
+        "setWindowStatus",
         "activeRequestKey",
         "preserveResults",
         "historical_anomalies",
@@ -169,26 +167,37 @@ def main() -> int:
         assert "dummy" not in lowered, f"{name} must not contain dummy fallbacks"
         assert "sample price" not in lowered, f"{name} must not contain sample prices"
 
-    # Provider-incompatible pairs are reconciled before the request.
-    assert "reconcileSelection" in analysis
+    # Provider-incompatible pairs are reconciled before the request, and the
+    # single Historical Window select maps each option to a supported pair.
+    assert "reconcileSelection" in utils
+    assert "windowFromPeriod" in utils
+    assert "HISTORICAL_WINDOWS" in utils
+    assert "windowLabel" in utils
     assert "AbortController" in utils
     assert "isCurrent" in utils
 
-    # Exchange/period/interval are deliberately visible in the redesign. They
-    # must remain real, keyboard-reachable form controls rather than a hidden
-    # compatibility block. The historical timeframe selector still lives inside
-    # the results stage and only renders after a successful explicit analysis.
+    # Symbol and exchange are deliberately visible in the redesign. The single
+    # Historical Window selector lives inside the chart header and controls
+    # both the chart data and the analysis data from one guarded fetch.
     assert 'class="search-fields"' in html
     assert "advanced-fields" not in html
-    for field_id in ("exchangeSelect", "periodSelect", "intervalSelect"):
+    for field_id in ("exchangeSelect", "windowSelect"):
         attrs = parser.attributes.get(field_id, {})
         assert field_id in parser.ids, f"missing control: {field_id}"
         assert attrs.get("tabindex") != "-1", f"{field_id} must be keyboard reachable"
         assert "hidden" not in attrs, f"{field_id} must be visible"
+
+    # The period and interval selects were removed from the analysis form.
+    assert "periodSelect" not in parser.ids
+    assert "intervalSelect" not in parser.ids
+    assert "timeframePanel" not in parser.ids
+    assert 'data-tooltip="How much history to request' not in html
+    assert 'data-tooltip="Bar size' not in html
+
     assert 'id="dashboardStage" class="dashboard-stage hidden"' in html
-    assert html.index('id="timeframePanel"') > html.index('id="dashboardStage"')
-    assert html.index('id="timeframePanel"') < html.index('id="metaPanel"')
-    assert "timeframeControls.addEventListener" in analysis
+    assert html.index('id="windowSelect"') > html.index('id="chartPanel"')
+    assert html.index('id="windowSelect"') < html.index('id="priceChart"')
+    assert "windowSelect.addEventListener" in analysis
     assert "runAnalysis(nextSelection, { preserveResults: true, force: true })" in analysis
 
     # The published history list is exactly the honest provider-supported set.
@@ -217,9 +226,9 @@ def main() -> int:
 
     style = (ROOT / "style.css").read_text(encoding="utf-8")
     for selector in (
-        ".timeframe-panel",
-        ".timeframe-controls",
-        ".timeframe-btn.active",
+        ".window-field",
+        ".window-label",
+        ".window-status",
         ".chart-canvas-wrap",
         ".anomaly-marker-tooltip",
         ".marker-swatch",
@@ -234,10 +243,67 @@ def main() -> int:
     assert "clearTimeout" in analysis
     assert "timedOut" in analysis
 
+    # ------------------------------------------------------------------
+    # The wishlist / login / register pages and the accounts backend were
+    # deliberately removed. Nothing that referenced them may come back.
+    # ------------------------------------------------------------------
+    config = (ROOT / "config.js").read_text(encoding="utf-8")
+
+    # config.js has exactly one assignment target: the backend URL. Anything
+    # else (keys, tokens, secrets) would be a regression.
+    extra_config_lines = [
+        line
+        for line in config.splitlines()
+        if line.strip().startswith("window.")
+        and "CDF_API_BASE" not in line
+    ]
+    assert not extra_config_lines, (
+        f"config.js must only set CDF_API_BASE: {extra_config_lines}"
+    )
+    assert 'window.CDF_API_BASE = "http://localhost:8000"' in config
+
+    # The removed pages must stay removed, and no surviving file may still
+    # point at them or at the removed backend endpoints.
+    for removed_page in ("wishlist.html", "login.html", "register.html"):
+        assert not (ROOT / removed_page).is_file(), (
+            f"removed page is back on disk: {removed_page}"
+        )
+
+    for name in (
+        "index.html",
+        "stocks.html",
+        "stock-analysis.html",
+        "config.js",
+        "script.js",
+        "analysis.js",
+        "chart-utils.js",
+    ):
+        source = (ROOT / name).read_text(encoding="utf-8")
+        if name == "script.js":
+            assert "wishlist" not in source.lower(), (
+                "script.js still mentions wishlist"
+            )
+        for stale in (
+            "wishlist.html",
+            "login.html",
+            "register.html",
+            "navAuthLink",
+            "/api/auth/",
+            "/api/watchlist",
+            "fetchAuthJson",
+            "initWishlistPage",
+            "initAuthForms",
+            "clean-data-wishlist",
+        ):
+            assert stale not in source, (
+                f"{name} still references removed feature: {stale}"
+            )
+
     print("frontend checks passed")
     print(f"  html ids: {len(parser.ids)}")
     print(f"  scripts: {', '.join(parser.scripts)}")
     print(f"  vendor bytes: {len(vendor.encode('utf-8'))}")
+    print("  removed pages verified: none of wishlist/login/register exist")
     return 0
 
 

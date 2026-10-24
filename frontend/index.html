@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261023c">
+  <link rel="stylesheet" href="style.css?v=20261024a">
   <script>
     /* Apply the saved appearance before first paint. Dark is the default. */
     try {
@@ -45,7 +45,6 @@
       <li class="active"><a href="index.html" class="active" aria-current="page">Home</a></li>
       <li><a href="stocks.html">Stocks</a></li>
       <li><a href="stock-analysis.html">Stock Analysis</a></li>
-      <li><a href="wishlist.html">Wishlist</a></li>
     </ul>
 
     <div class="nav-actions">
@@ -315,12 +314,88 @@
       </div>
     </section>
 
+    <!-- Investor's Learning Corner: evergreen education. Nothing here is advice,
+         no statistics are invented, and nothing promises returns. -->
+    <section class="section learning-section" id="learning" aria-labelledby="learningTitle">
+      <div class="section-head">
+        <span class="eyebrow">Investor's Learning Corner</span>
+        <h2 id="learningTitle">Learn the language of markets</h2>
+        <p class="section-lede">
+          Five short lessons on how investors think about risk, spread and patience —
+          general education for beginners. No advice, no predictions, no product pitches.
+        </p>
+      </div>
+
+      <!-- Prominent rotating tip. One evergreen note per UTC calendar day. -->
+      <div class="learning-tip" role="group" aria-label="Tip of the day">
+        <div class="learning-tip-head">
+          <span class="tip-kicker">Tip of the day</span>
+          <span class="tip-index" id="tipIndex">—</span>
+        </div>
+        <div class="learning-tip-body">
+          <h3 id="tipTitle">Loading today's tip…</h3>
+          <p id="tipText">The tip appears once the page has finished loading.</p>
+        </div>
+        <span class="tip-note">Rotates daily · general education, not advice</span>
+      </div>
+
+      <div class="learning-grid">
+        <article class="learning-card">
+          <span class="learning-num">01</span>
+          <h3>Risk management comes first</h3>
+          <p>
+            Deciding how much you are willing to lose on one position — before you take
+            it — is the core investing habit. In practice this is often handled with
+            position sizing and pre-set maximum losses, so a single bad outcome stays
+            survivable.
+          </p>
+        </article>
+        <article class="learning-card">
+          <span class="learning-num">02</span>
+          <h3>Diversification spreads what you cannot predict</h3>
+          <p>
+            No company, sector or asset class behaves the same in every season. Holding
+            a mix means the poor stretch of one investment is cushioned by the others;
+            in general, a wider spread softens the swings of the whole portfolio.
+          </p>
+        </article>
+        <article class="learning-card">
+          <span class="learning-num">03</span>
+          <h3>Volatility is movement, not danger by itself</h3>
+          <p>
+            Volatility measures how far prices travel up and down. High volatility means
+            larger possible swings in either direction, which rewards smaller stakes and
+            longer horizons; low volatility tends to move in smaller steps.
+          </p>
+        </article>
+        <article class="learning-card">
+          <span class="learning-num">04</span>
+          <h3>Long-term investing vs speculation</h3>
+          <p>
+            Investors generally hold for years, follow the underlying business and accept
+            slower, steadier paths. Speculation chases short-term price moves and accepts
+            much larger swings. Knowing which game you are playing is itself risk
+            management.
+          </p>
+        </article>
+        <article class="learning-card">
+          <span class="learning-num">05</span>
+          <h3>Past returns never promise the future</h3>
+          <p>
+            A stock or fund that multiplied in the past may do nothing of the kind going
+            forward. History is context for study — it does not guarantee what comes
+            next, so plans built on repeated past gains deserve extra scepticism.
+          </p>
+        </article>
+      </div>
+    </section>
+
     <!-- Real headlines from the backend RSS proxy. -->
     <section class="section news-section" id="news" aria-labelledby="newsTitle">
       <div class="section-title-row section-head">
         <div>
-          <span class="eyebrow">Market updates</span>
-          <h2 id="newsTitle">Latest market updates</h2>
+          <span class="eyebrow">Latest market news</span>
+          <h2 id="newsTitle">Market Pulse</h2>
         </div>
         <span class="text-muted small" id="newsSource">Publisher feed loads from the backend</span>
       </div>
@@ -328,10 +403,29 @@
         Publication time comes from the publisher. Retrieval time is when this backend fetched
         the feed — the two are intentionally shown separately.
       </p>
+
+      <!--
+        Continuous headline strip. Rendered only when the genuine publisher feed
+        returned two or more real articles; never shown on failure or with a
+        single article (a one-item loop would pretend there is more news).
+      -->
+      <div id="newsTicker" class="news-ticker" hidden aria-label="Scrolling market headlines">
+        <div id="newsTickerTrack" class="news-ticker-track"></div>
+      </div>
+
       <div id="newsStatus" class="news-status" role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span> Loading real headlines…
       </div>
-      <div id="newsGrid" class="news-grid" aria-live="polite"></div>
+
+      <!-- Prominent spotlight card (rotates with a cross-fade) beside the smaller cards. -->
+      <div class="news-layout">
+        <article id="newsFeatured" class="news-featured" hidden>
+          <div class="news-featured-body">
+            <p class="news-featured-note">This device cycles between the returned headlines.</p>
+          </div>
+        </article>
+        <div id="newsGrid" class="news-grid" aria-live="polite"></div>
+      </div>
       <p id="newsRetrieved" class="news-retrieved"></p>
     </section>
 
@@ -490,8 +584,8 @@
 
   <script src="config.js"></script>
   <script src="vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="chart-utils.js?v=20261023c"></script>
-  <script src="script.js?v=20261023c"></script>
+  <script src="chart-utils.js?v=20261024a"></script>
+  <script src="script.js?v=20261024b"></script>
   <script>
     (function () {
       const label = document.getElementById("apiBaseLabel");

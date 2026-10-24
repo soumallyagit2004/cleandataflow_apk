@@ -188,7 +188,7 @@ def calculate_divergence(
     """Return price/volume divergence analysis using real OHLCV bars.
 
     Divergence compares the direction of price change versus volume change
-    over a configurable lookback period.
+    over a configurable lookback period measured between *eligible* bars.
 
     Signal values:
       "bullish"   — price falling while volume rising (potential support)
@@ -196,8 +196,12 @@ def calculate_divergence(
       "aligned"   — price and volume moving in the same direction
       "neutral"   — no meaningful change in either metric
 
-    Missing or zero volumes are handled honestly; divergence is marked
-    ``unavailable`` when the lookback cannot be computed.
+    An eligible bar has a finite close and a positive, finite volume. Price
+    and volume are always measured between the same first and last eligible
+    bars of one trailing window, so the latest eligible bar is evaluated and
+    the two horizons cannot silently misalign when zero-volume bars are
+    present. Missing or zero volumes are handled honestly; divergence is
+    marked ``unavailable`` when the lookback cannot be computed.
     """
     if period not in SUPPORTED_DIVERGENCE_PERIODS:
         return {
@@ -209,28 +213,43 @@ def calculate_divergence(
             "explanation": f"Divergence period {period} not supported; choose {sorted(SUPPORTED_DIVERGENCE_PERIODS)}",
         }
 
-    # Extract closing prices and volumes in chronological order
-    closes = [bar.get("close") for bar in bars if bar.get("close") is not None]
-    volumes = [bar.get("volume") for bar in bars if bar.get("volume") is not None and bar.get("volume") != 0]
+    # Index-aligned eligibility: a bar participates only when it carries both a
+    # usable close and a usable positive volume. Eligibility is kept per bar
+    # (no compressed per-series lists), so the price and volume windows always
+    # span the same bars even when zero-volume or incomplete bars appear.
+    eligible: list[tuple[float, float]] = []
+    for bar in bars:
+        close = bar.get("close")
+        volume = bar.get("volume")
+        if close is None or volume is None:
+            continue
+        try:
+            close_value = float(close)
+            volume_value = float(volume)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(close_value) and math.isfinite(volume_value)):
+            continue
+        if volume_value <= 0:
+            continue
+        eligible.append((close_value, volume_value))
 
-    # Need at least period+1 data points to compute change over the lookback period
-    if len(closes) < period + 1 or len(volumes) < period + 1:
+    # Need at least period+1 eligible observations: the first and last of the
+    # trailing window are the shared baseline endpoints for both series.
+    if len(eligible) < period + 1:
         return {
             "price_change_percent": None,
             "volume_change_percent": None,
             "signal": None,
             "available": False,
-            "explanation": f"insufficient data: {len(closes)} closes, {len(volumes)} valid volumes; need at least {period + 1}",
+            "explanation": f"insufficient data: {len(eligible)} usable price+volume observations; need at least {period + 1}",
         }
 
-    price_pct = _pct_change(closes[-period - 1 : -1] if len(closes) > period else closes)
-    if price_pct is None:
-        # fallback: use all available closes (but still insufficient for lookback)
-        price_pct = _pct_change(closes)
-
-    volume_pct = _pct_change(volumes[-period - 1 : -1] if len(volumes) > period else volumes)
-    if volume_pct is None:
-        volume_pct = _pct_change(volumes)
+    # The change is measured from the first to the last bar of the trailing
+    # period+1 eligible window — the endpoint is the latest eligible bar.
+    window = eligible[-(period + 1) :]
+    price_pct = _pct_change([window[0][0], window[-1][0]])
+    volume_pct = _pct_change([window[0][1], window[-1][1]])
 
     if price_pct is None or volume_pct is None:
         return {
@@ -338,8 +357,9 @@ def calculate_volume_spike(
 ) -> dict[str, Any]:
     """Return volume-spike analysis using real OHLCV bars.
 
-    Compares the latest bar's volume against the average volume of a configurable
-    number of preceding bars, excluding the latest bar from the baseline.
+    Compares the latest bar's volume against the average volume of the
+    *period* bars immediately before it, excluding the latest bar from the
+    baseline.
 
     Returns latest volume, baseline average volume, volume ratio,
     percentage above baseline, availability status, and a clear explanation.
@@ -374,7 +394,11 @@ def calculate_volume_spike(
         }
 
     latest_volume = all_volumes[-1]
-    baseline_volumes = all_volumes[:-1]  # all bars except the latest
+    # The baseline is exactly the *period* bars before the latest one, so the
+    # lookback length no longer depends on how much history was fetched. The
+    # latest bar itself is never part of its own baseline. The insufficient-
+    # history check above guarantees this slice holds exactly `period` volumes.
+    baseline_volumes = all_volumes[-period - 1 : -1]
 
     # Filter out zero and missing volumes from the baseline
     positive_volumes = [v for v in baseline_volumes if v is not None and v > 0]
@@ -1903,70 +1927,69 @@ def _historical_volume_spikes(bars: list[dict[str, Any]]) -> dict[str, Any]:
     """Evaluate volume spikes on every usable historical bar, causally.
 
     The existing latest-bar detector compares the target volume with the mean
-    of all preceding positive volumes and calls a ratio above 2.0 a spike.
-    Re-running that same calculation on each prefix preserves its threshold
-    and avoids look-ahead.
+    of the positive volumes in the ``period`` bars immediately before it and
+    calls a ratio above 2.0 a spike. Re-running that same calculation on each
+    prefix preserves its threshold and avoids look-ahead.
 
-    Implementation note: the baseline for the target bar is exactly the
-    growing set of preceding positive volumes, so incremental running totals
-    (left-fold sum, same order as ``sum()``) reproduce the per-prefix
-    calculation bit-for-bit without re-listing the whole prefix per bar.
+    Implementation note: the prefix's non-missing volumes are kept in one
+    growing list and the baseline is read as that list's last ``period``
+    entries before the target bar, so the per-prefix calculation is
+    reproduced exactly without re-listing the whole prefix per bar.
     """
     points: list[dict[str, Any]] = []
     evaluated = 0
     period = VOLUME_SPIKE_DEFAULT_PERIOD
 
-    # Running totals over bars 0..i-1 while bar i (the target) is evaluated.
-    # The physics of the original detector: every bar with a non-None volume
-    # joins the volume count; strictly positive ones join the baseline.
-    count_volumes = 0
-    baseline_sum = 0  # left-fold sum of positive volumes, same order as sum()
-    baseline_count = 0
+    # Growing list of the prefix's non-missing volumes (one entry per bar that
+    # carries one). The target bar's own entry is appended only after the
+    # target has been evaluated, so len(volumes_seen) plays the role of the
+    # old count_volumes and volumes_seen[-period:] is exactly the baseline
+    # window `calculate_volume_spike` reads before the latest entry.
+    volumes_seen: list[float] = []
 
     for bar in bars:
+        volume = bar.get("volume")
         if _bar_has_complete_ohlcv(bar) and _historical_timestamp(bar):
-            # The prefix the original detector sees ends at this bar, so the
-            # volume count includes the target bar while the baseline
-            # (strictly positive volumes before it) does not.
-            available = count_volumes + 1 >= period + 1 and baseline_count > 0
+            # The prefix the original detector sees ends at this bar: the
+            # target is the last non-missing volume; the baseline window is
+            # the `period` entries before it, with zero volumes filtered out.
+            available = len(volumes_seen) + 1 >= period + 1
             if available:
-                latest_volume = bar.get("volume")
-                baseline_avg = baseline_sum / baseline_count
-                volume_ratio = latest_volume / baseline_avg
-                evaluated += 1
-                if volume_ratio > 2.0:
-                    rounded_ratio = round(volume_ratio, 4)
-                    points.append(
-                        _historical_point(
-                            bar,
-                            score=rounded_ratio,
-                            threshold=2.0,
-                            score_label="Volume ratio",
-                            values={
-                                "latest_volume": latest_volume,
-                                "baseline_average": round(baseline_avg, 2),
-                                "percent_above_baseline": round(
-                                    ((latest_volume - baseline_avg) / baseline_avg) * 100, 2
+                positive_baseline = [v for v in volumes_seen[-period:] if v > 0]
+                if positive_baseline:
+                    latest_volume = volume
+                    baseline_avg = sum(positive_baseline) / len(positive_baseline)
+                    volume_ratio = latest_volume / baseline_avg
+                    evaluated += 1
+                    if volume_ratio > 2.0:
+                        rounded_ratio = round(volume_ratio, 4)
+                        points.append(
+                            _historical_point(
+                                bar,
+                                score=rounded_ratio,
+                                threshold=2.0,
+                                score_label="Volume ratio",
+                                values={
+                                    "latest_volume": latest_volume,
+                                    "baseline_average": round(baseline_avg, 2),
+                                    "percent_above_baseline": round(
+                                        ((latest_volume - baseline_avg) / baseline_avg) * 100, 2
+                                    ),
+                                },
+                                signal="spike",
+                                explanation=(
+                                    f"Volume on {bar.get('timestamp')} was {rounded_ratio}x the average "
+                                    f"of the {period} bars before it in the returned series; "
+                                    "the existing spike threshold is > 2.0x. This is unusual "
+                                    "volume, not proof of manipulation."
                                 ),
-                            },
-                            signal="spike",
-                            explanation=(
-                                f"Volume on {bar.get('timestamp')} was {rounded_ratio}x the average "
-                                "of all preceding positive volumes in the returned series; "
-                                "the existing spike threshold is > 2.0x. This is unusual "
-                                "volume, not proof of manipulation."
-                            ),
+                            )
                         )
-                    )
 
         # Advance the running state for every bar (gated or not), exactly like
         # the prefix the next bar would see.
-        volume = bar.get("volume")
         if volume is not None:
-            count_volumes += 1
-            if volume > 0:
-                baseline_sum = baseline_sum + volume
-                baseline_count += 1
+            volumes_seen.append(volume)
 
     if evaluated == 0:
         return _historical_detector(
@@ -1976,11 +1999,11 @@ def _historical_volume_spikes(bars: list[dict[str, Any]]) -> dict[str, Any]:
             method=(
                 "Re-evaluates the existing volume-spike calculation on each "
                 "returned prefix; spike when the target volume is > 2.0x the "
-                "mean of preceding positive volumes."
+                "mean of the positive volumes in the period bars before it."
             ),
             reason=(
-                "At least 21 complete OHLCV bars are needed before a historical "
-                "volume baseline can be evaluated."
+                "At least 21 returned bars with visible volumes are needed "
+                "before a historical volume baseline can be evaluated."
             ),
         )
 
@@ -1990,8 +2013,10 @@ def _historical_volume_spikes(bars: list[dict[str, Any]]) -> dict[str, Any]:
         evaluated_bars=evaluated,
         method=(
             "Walk-forward re-evaluation of the existing volume-spike formula. "
-            "For each complete historical bar, only that bar and earlier bars "
-            "enter the baseline; the existing spike threshold is ratio > 2.0x."
+            "For each complete historical bar, the baseline is the mean of "
+            "the positive volumes in the period bars before that bar (the "
+            "target bar itself is excluded); the existing spike threshold is "
+            "ratio > 2.0x."
         ),
     )
 
@@ -2112,9 +2137,10 @@ def _historical_divergences(bars: list[dict[str, Any]]) -> dict[str, Any]:
     numeric anomaly threshold, so none is invented here. Only the meaningful
     ``bullish`` and ``bearish`` signals become historical points.
 
-    Implementation note: the per-prefix close and valid-volume lists are grown
-    incrementally and only the fixed ``period``-long lookback window is
-    re-read for each bar, so the per-prefix calculation is reproduced exactly
+    Implementation note: eligible (close, positive volume) pairs are grown
+    incrementally and only the fixed ``period``-long eligible window is
+    re-read for each bar, so the per-prefix calculation (both series measured
+    between the same first and last eligible bars) is reproduced exactly
     without re-listing the whole prefix per bar.
     """
     points: list[dict[str, Any]] = []
@@ -2123,53 +2149,45 @@ def _historical_divergences(bars: list[dict[str, Any]]) -> dict[str, Any]:
     previous_signal: str | None = None
     period = DIVERGENCE_DEFAULT_PERIOD
 
-    # Incremental per-prefix lists (the prefix that ends at the current bar).
-    closes: list[float] = []
-    volumes: list[float] = []
-
-    def _pct_change_window(values: list[float], window_first: float, window_last: float) -> float | None:
-        """Replicate _pct_change on the lookback slice without re-slicing."""
-        if len(values) < 2 or window_first == 0:
-            return None
-        return ((window_last - window_first) / abs(window_first)) * 100
+    # Incrementally grown list of eligible (close, positive volume) pairs. A
+    # pair joins for every bar that carries both a usable close and a usable
+    # positive volume, gated or not — exactly what the per-prefix reference
+    # computes from the whole prefix.
+    eligible: list[tuple[float, float]] = []
 
     for bar in bars:
-        # Advance the per-prefix lists first: the prefix seen by the original
+        # Advance the per-prefix list first: the prefix seen by the original
         # detector ends at (and includes) the current bar.
         close = bar.get("close")
-        if close is not None:
-            closes.append(close)
         volume = bar.get("volume")
-        if volume is not None and volume != 0:
-            volumes.append(volume)
+        if close is not None and volume is not None:
+            try:
+                close_value = float(close)
+                volume_value = float(volume)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if (
+                    math.isfinite(close_value)
+                    and math.isfinite(volume_value)
+                    and volume_value > 0
+                ):
+                    eligible.append((close_value, volume_value))
 
         if not (_bar_has_complete_ohlcv(bar) and _historical_timestamp(bar)):
             continue
 
-        if len(closes) < period + 1 or len(volumes) < period + 1:
+        if len(eligible) < period + 1:
             continue
 
-        # price change over closes[-(period+1):-1]: first vs last of the slice
-        price_pct = _pct_change_window(
-            closes, closes[len(closes) - 1 - period], closes[len(closes) - 2]
-        )
-        if price_pct is None:
-            # fallback: use all available closes (but still insufficient for lookback)
-            price_pct = (
-                None
-                if closes[0] == 0
-                else ((closes[-1] - closes[0]) / abs(closes[0])) * 100
-            )
+        # Both series are measured between the first and last bars of the
+        # trailing period+1 eligible window — the endpoint is this bar.
+        window = eligible[-(period + 1) :]
+        first_close, last_close = window[0][0], window[-1][0]
+        first_volume = window[0][1]
 
-        volume_pct = _pct_change_window(
-            volumes, volumes[len(volumes) - 1 - period], volumes[len(volumes) - 2]
-        )
-        if volume_pct is None:
-            volume_pct = (
-                None
-                if volumes[0] == 0
-                else ((volumes[-1] - volumes[0]) / abs(volumes[0])) * 100
-            )
+        price_pct = None if first_close == 0 else ((last_close - first_close) / abs(first_close)) * 100
+        volume_pct = None if first_volume == 0 else ((window[-1][1] - first_volume) / abs(first_volume)) * 100
 
         if price_pct is None or volume_pct is None:
             continue
@@ -2262,9 +2280,10 @@ def _historical_divergences(bars: list[dict[str, Any]]) -> dict[str, Any]:
         method=(
             "Walk-forward re-evaluation of the existing divergence formula. "
             "For each complete historical bar, price and volume changes are "
-            "compared over the prior 20-bar lookback. One point marks the "
-            "first bar of each sustained bullish/bearish run; the signal is "
-            "context, not a scored anomaly threshold."
+            "compared between the same two eligible bars, ending at that bar "
+            "(zero-volume bars are skipped for both series alike). One point "
+            "marks the first bar of each sustained bullish/bearish run; the "
+            "signal is context, not a scored anomaly threshold."
         ),
         limitations=[
             "Divergence is a directional signal with no numeric anomaly "

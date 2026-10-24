@@ -8,7 +8,6 @@
  *  - homepage: real index cards, breadth, a real-data hero snapshot,
  *    market news, this-device recent analysis and real feedback submission
  *  - Stocks page: indices, constituent search/sort and honest states
- *  - Wishlist: a small localStorage list (symbols only, never prices)
  */
 
 const API_BASE = (() => {
@@ -16,15 +15,18 @@ const API_BASE = (() => {
     typeof window !== "undefined" && typeof window.CDF_API_BASE === "string"
       ? window.CDF_API_BASE.trim()
       : "";
-  const base = configured || "http://localhost:8000";
+  /* Same-origin by default: production pages are served by the backend
+     itself, so an empty base means "this page's own origin". config.js only
+     fills in a real URL for local static-server development or split deploys. */
+  const base = configured || "";
   return base.replace(/\/+$/, "");
 })();
 
 /* Contextual message for an unreachable backend: the terminal command is only
-   useful for local development; deployed sites should instead check config.js. */
+   useful for local development; deployed sites are same-origin by default. */
 const API_HELP = /(localhost|127\.0\.0\.1)([:\/]|$)/.test(API_BASE)
   ? "Start the backend in a second terminal:  cd backend  then  python -m uvicorn main:app --host 127.0.0.1 --port 8000"
-  : "Check the configured backend URL (window.CDF_API_BASE in config.js) and that the backend deployment is online.";
+  : "The frontend should be served by (or pointed at) the backend deployment; check that it is online (see frontend/config.js).";
 
 /* ==========================================================================
    Small helpers
@@ -478,6 +480,19 @@ function describeRequestError(error, endpointLabel) {
 }
 
 /* ==========================================================================
+   API base display
+   ========================================================================== */
+
+/* The Home page's connection card may claim "localhost:8000" as no-JS
+   fallback text; this replaces it with the truth for the current page. */
+function initApiBaseLabel() {
+  const label = byId("apiBaseLabel");
+  if (!label) return;
+  label.textContent =
+    API_BASE || "the same origin this page is served from";
+}
+
+/* ==========================================================================
    Theme
    ========================================================================== */
 
@@ -595,9 +610,36 @@ function initAmbientCanvas() {
     dpr: 1,
     particles: [],
     rings: [
-      { radius: 0.30, tiltX: 0.52, tiltZ: 0.22, speed: 0.010, phase: 0.4, color: "56, 189, 248" },
-      { radius: 0.40, tiltX: 1.18, tiltZ: -0.35, speed: -0.007, phase: 1.6, color: "167, 139, 250" },
-      { radius: 0.48, tiltX: 0.88, tiltZ: 0.10, speed: 0.005, phase: 3.2, color: "34, 211, 238" },
+      {
+        radius: 0.3,
+        tiltX: 0.52,
+        tiltZ: 0.22,
+        speed: 0.01,
+        phase: 0.4,
+        color: "56, 189, 248",
+        ballSpeed: 0.12,
+        balls: [0, 2.4],
+      },
+      {
+        radius: 0.4,
+        tiltX: 1.18,
+        tiltZ: -0.35,
+        speed: -0.007,
+        phase: 1.6,
+        color: "167, 139, 250",
+        ballSpeed: -0.085,
+        balls: [1.1, 4.2],
+      },
+      {
+        radius: 0.48,
+        tiltX: 0.88,
+        tiltZ: 0.1,
+        speed: 0.005,
+        phase: 3.2,
+        color: "34, 211, 238",
+        ballSpeed: 0.06,
+        balls: [0.6, 3.3],
+      },
     ],
     lastFrame: 0,
     themeLight: false,
@@ -688,6 +730,40 @@ function initAmbientCanvas() {
     context.setLineDash([2, 10]);
     context.stroke();
     context.setLineDash([]);
+
+    // Orbiting spheres: glowing orbs travel along the same depth-rotated
+    // ellipse path. Each ring carries two spheres on opposite arcs so the
+    // rotation reads clearly, while staying calm and slow.
+    (ring.balls || []).forEach((ballPhase) => {
+      const t = seconds * (ring.ballSpeed || 0) + ballPhase;
+      const bpx = Math.cos(t) * base;
+      const bpy = Math.sin(t) * base * 0.42;
+      const brx = bpx * cosZ - bpy * sinZ;
+      const bry = bpx * sinZ + bpy * cosZ;
+      const bry2 = bry * cosX;
+      const brz = bry * sinX + Math.sin(t + angle) * base * 0.18;
+      const p = project((brx / base) * 0.9, (bry2 / base) * 0.9, 1.2 + brz / base);
+
+      const core = 2.2 + 2.4 * p.scale;
+      const halo = core * 3.6;
+
+      const haloGradient = context.createRadialGradient(p.x, p.y, 0, p.x, p.y, halo);
+      haloGradient.addColorStop(0, `rgba(${ring.color}, ${state.themeLight ? 0.3 : 0.45})`);
+      haloGradient.addColorStop(1, `rgba(${ring.color}, 0)`);
+      context.fillStyle = haloGradient;
+      context.beginPath();
+      context.arc(p.x, p.y, halo, 0, Math.PI * 2);
+      context.fill();
+
+      const coreGradient = context.createRadialGradient(p.x, p.y, 0, p.x, p.y, core);
+      coreGradient.addColorStop(0, state.themeLight ? "rgba(255, 255, 255, 0.92)" : "rgba(236, 254, 255, 0.95)");
+      coreGradient.addColorStop(0.55, `rgba(${ring.color}, 0.72)`);
+      coreGradient.addColorStop(1, `rgba(${ring.color}, 0)`);
+      context.fillStyle = coreGradient;
+      context.beginPath();
+      context.arc(p.x, p.y, core, 0, Math.PI * 2);
+      context.fill();
+    });
   }
 
   function draw(seconds) {
@@ -1496,11 +1572,115 @@ function newsErrorState(error) {
   if (retry) retry.addEventListener("click", initMarketNews);
 }
 
+/* --- Featured spotlight card -------------------------------------------- */
+
+/* Rotation pauses on hover/focus and is skipped entirely under
+   prefers-reduced-motion. Only real returned articles are ever shown. */
+const NEWS_FEATURED_ROTATE_MS = 6500;
+const NEWS_FEATURED_FADE_MS = 240;
+let newsFeaturedTimer = null;
+let newsFeaturedFadeTimer = null;
+let newsFeaturedPaused = false;
+
+function stopNewsFeaturedRotation() {
+  if (newsFeaturedTimer !== null) {
+    window.clearInterval(newsFeaturedTimer);
+    newsFeaturedTimer = null;
+  }
+  if (newsFeaturedFadeTimer !== null) {
+    window.clearTimeout(newsFeaturedFadeTimer);
+    newsFeaturedFadeTimer = null;
+  }
+  newsFeaturedPaused = false;
+}
+
+function buildNewsFeaturedBody(article) {
+  return `
+        <p class="news-featured-kicker">Headline spotlight</p>
+        <a class="news-featured-link" href="${escapeAttr(article.link)}" target="_blank" rel="noopener noreferrer">
+          <h3>${escapeHtml(article.title)}</h3>
+          <span class="news-open">Read at source ↗</span>
+        </a>
+        <div class="news-meta">
+          <span class="news-publisher">${escapeHtml(article.publisher || "Publisher")}</span>
+          <span class="news-dot" aria-hidden="true"></span>
+          <time datetime="${escapeAttr(article.publishedAt || "")}">${escapeHtml(
+            fmtPublishedTime(article.publishedAt)
+          )}</time>
+        </div>
+        <p class="news-featured-note">This card rotates between the returned headlines.</p>`;
+}
+
+function advanceNewsFeatured(articles) {
+  const featured = byId("newsFeatured");
+  if (!featured || articles.length < 2) return;
+
+  newsFeaturedTimer = window.setInterval(() => {
+    if (newsFeaturedPaused) return;
+    const body = featured.querySelector(".news-featured-body");
+    if (!body) return;
+    newsFeaturedIndex = (newsFeaturedIndex + 1) % articles.length;
+    body.classList.add("is-fading");
+    newsFeaturedFadeTimer = window.setTimeout(() => {
+      body.innerHTML = buildNewsFeaturedBody(articles[newsFeaturedIndex]);
+      body.classList.remove("is-fading");
+    }, NEWS_FEATURED_FADE_MS);
+  }, NEWS_FEATURED_ROTATE_MS);
+
+  /* Hovering or focusing the card holds the rotation. */
+  const pause = () => { newsFeaturedPaused = true; };
+  const resume = () => { newsFeaturedPaused = false; };
+  featured.addEventListener("mouseenter", pause);
+  featured.addEventListener("mouseleave", resume);
+  featured.addEventListener("focusin", pause);
+  featured.addEventListener("focusout", resume);
+}
+
+let newsFeaturedIndex = 0;
+
+/* --- Continuous headline ticker ------------------------------------------ */
+
+/* The track holds the real headlines twice; translating exactly -50% of the
+   track width then loops seamlessly. The duplicate group is aria-hidden so
+   screen readers hear the headlines once, and :focus-within pauses the strip
+   for keyboard users. */
+function buildNewsTicker(articles) {
+  const ticker = byId("newsTicker");
+  const track = byId("newsTickerTrack");
+  if (!ticker || !track) return;
+
+  const usable = articles.filter(Boolean);
+  if (usable.length < 2) {
+    /* One article would make a repetitive fake-looking loop — show nothing. */
+    ticker.hidden = true;
+    track.innerHTML = "";
+    return;
+  }
+
+  const item = (article) => `
+        <a class="news-ticker-item" href="${escapeAttr(article.link)}" target="_blank" rel="noopener noreferrer">
+          <span class="news-ticker-dot" aria-hidden="true"></span>
+          <span class="news-ticker-title">${escapeHtml(article.title)}</span>
+          <span class="news-ticker-meta">${escapeHtml(article.publisher || "Publisher")}</span>
+        </a><span class="news-ticker-sep" aria-hidden="true"></span>`;
+  const group = usable.map(item).join("");
+  track.innerHTML =
+    `<div class="news-ticker-group">${group}</div>` +
+    `<div class="news-ticker-group" aria-hidden="true">${group}</div>`;
+
+  /* Speed follows the number of real headlines, clamped to a readable band. */
+  const duration = Math.max(28, Math.min(96, usable.length * 9));
+  track.style.setProperty("--news-ticker-duration", `${duration}s`);
+  /* Restarting the animation keeps the loop phase consistent after re-renders. */
+  ticker.hidden = false;
+}
+
 function renderNews(payload) {
   const grid = byId("newsGrid");
   const status = byId("newsStatus");
   const source = byId("newsSource");
   const retrieved = byId("newsRetrieved");
+  const featured = byId("newsFeatured");
   if (!grid || !status) return;
 
   const articles = Array.isArray(payload && payload.articles)
@@ -1511,6 +1691,8 @@ function renderNews(payload) {
           /^https?:\/\//.test(String(article.link || ""))
       )
     : [];
+
+  stopNewsFeaturedRotation();
 
   status.className = "news-status";
   if (source) {
@@ -1531,17 +1713,35 @@ function renderNews(payload) {
   if (!articles.length) {
     status.innerHTML = "The publisher feed returned no usable headlines. Nothing was fabricated.";
     grid.innerHTML = "";
+    if (featured) featured.hidden = true;
+    buildNewsTicker([]);
     return;
   }
 
   status.textContent = "";
   status.className = "news-status hidden";
 
+  /* The spotlight card is driven by JS below; the grid keeps the remaining
+     returned articles as regular news cards. */
+  if (featured) {
+    newsFeaturedIndex = 0;
+    const body = featured.querySelector(".news-featured-body");
+    if (body) body.innerHTML = buildNewsFeaturedBody(articles[0]);
+    featured.classList.remove("is-fading");
+    featured.hidden = false;
+    if (articles.length > 1) {
+      const reducedMotion =
+        Boolean(window.matchMedia) &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (!reducedMotion) startNewsFeaturedRotation(articles);
+    }
+  }
+
   grid.innerHTML = articles
     .slice(0, 6)
     .map(
       (article, index) => `
-        <article class="news-card${index === 0 ? " news-card-featured" : ""}">
+        <article class="news-card">
           <a class="news-link" href="${escapeAttr(article.link)}" target="_blank" rel="noopener noreferrer">
             <span class="news-index" aria-hidden="true">${String(index + 1).padStart(2, "0")}</span>
             <h3>${escapeHtml(article.title)}</h3>
@@ -1558,6 +1758,17 @@ function renderNews(payload) {
       `
     )
     .join("");
+
+  /* A lone article stays out of the ticker and keeps the Spotlight card static. */
+  if (featured && articles.length < 2) grid.classList.add("is-single");
+  else if (grid) grid.classList.remove("is-single");
+
+  buildNewsTicker(articles);
+}
+
+function startNewsFeaturedRotation(articles) {
+  /* Indirect so the rotation timer stays private to this module scope. */
+  advanceNewsFeatured(articles);
 }
 
 async function initMarketNews() {
@@ -1565,6 +1776,7 @@ async function initMarketNews() {
   const status = byId("newsStatus");
   if (!grid || !status) return;
 
+  stopNewsFeaturedRotation();
   status.className = "news-status";
   status.innerHTML = '<span class="spinner" aria-hidden="true"></span> Loading real headlines…';
   grid.innerHTML = "";
@@ -1575,6 +1787,9 @@ async function initMarketNews() {
   } catch (error) {
     console.error("Market news failed:", error);
     newsErrorState(error);
+    buildNewsTicker([]);
+    const featured = byId("newsFeatured");
+    if (featured) featured.hidden = true;
   }
 }
 
@@ -2325,103 +2540,6 @@ function initStocksPage() {
 }
 
 /* ==========================================================================
-   Wishlist — symbols stored locally, never prices
-   ========================================================================== */
-
-const WISHLIST_KEY = "clean-data-wishlist";
-
-function readWishlist() {
-  try {
-    const raw = localStorage.getItem(WISHLIST_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((item) => typeof item === "string")
-      : [];
-  } catch (error) {
-    return [];
-  }
-}
-
-function writeWishlist(symbols) {
-  try {
-    localStorage.setItem(WISHLIST_KEY, JSON.stringify(symbols));
-  } catch (error) {
-    /* Storage can be unavailable; the on-page list still updates. */
-  }
-}
-
-function renderWishlist() {
-  const list = byId("wishlistList");
-  const empty = byId("wishlistEmpty");
-  if (!list) return;
-
-  const symbols = readWishlist();
-  if (empty) empty.classList.toggle("hidden", symbols.length > 0);
-
-  list.innerHTML = symbols
-    .map(
-      (symbol) => `
-        <li class="wishlist-item">
-          <a class="stock-link" href="stock-analysis.html?symbol=${encodeURIComponent(symbol)}&exchange=NSE">
-            <strong>${escapeHtml(symbol)}</strong>
-          </a>
-          <span class="text-muted small">NSE</span>
-          <span class="wishlist-actions">
-            <a class="stock-link small" href="stock-analysis.html?symbol=${encodeURIComponent(symbol)}&exchange=NSE">Analyse</a>
-            <button type="button" data-remove="${escapeAttr(symbol)}">Remove</button>
-          </span>
-        </li>
-      `
-    )
-    .join("");
-
-  list.querySelectorAll("button[data-remove]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const symbol = button.getAttribute("data-remove");
-      writeWishlist(readWishlist().filter((item) => item !== symbol));
-      renderWishlist();
-    });
-  });
-}
-
-function initWishlistPage() {
-  const form = byId("addStockForm");
-  const input = byId("wishlistSymbol");
-  const message = byId("wishlistMessage");
-
-  if (!form || !input) return;
-
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const symbol = input.value.trim().toUpperCase();
-
-    if (!/^[A-Z0-9.^-]{1,30}$/.test(symbol)) {
-      if (message) {
-        message.textContent =
-          "Enter a valid NSE/BSE symbol using letters, numbers, dots, hyphens or ^.";
-        message.className = "selection-note";
-      }
-      return;
-    }
-
-    const symbols = readWishlist();
-    if (!symbols.includes(symbol)) {
-      symbols.push(symbol);
-      writeWishlist(symbols);
-    }
-
-    input.value = "";
-    if (message) {
-      message.textContent = `${symbol} added. Symbols are stored in this browser only; prices are fetched from the backend when you open an analysis.`;
-      message.className = "selection-note";
-    }
-    renderWishlist();
-  });
-
-  renderWishlist();
-}
-
-/* ==========================================================================
    Homepage test / CTA buttons
    ========================================================================== */
 
@@ -2454,16 +2572,77 @@ function initHomepageButtons() {
 }
 
 /* ==========================================================================
+   Investor's Learning Corner — evergreen education, never advice
+   ========================================================================== */
+
+/**
+ * Short, evergreen investor-education notes. Deliberately general: no market
+ * statistics, no predictions, no company names and no instruction to buy or
+ * sell anything. The "Tip of the day" cycles through this list once per
+ * calendar day (UTC), so every visit on the same day sees the same tip.
+ */
+const LEARNING_TIPS = [
+  {
+    title: "Decide your exit before you enter",
+    text: "Know in advance the level or percentage where you would step aside from a position. A pre-decided exit plan replaces panic with a process when a trade moves against you.",
+  },
+  {
+    title: "Diversify by what can go wrong together",
+    text: "Companies in the same industry often fall at the same time. Spreading a portfolio across sectors and asset types means one bad event is unlikely to reach everything you hold.",
+  },
+  {
+    title: "Volatility changes the pace, not the goal",
+    text: "Volatility describes how far prices travel up and down. Rougher markets move in larger steps, so calm position sizing and longer horizons matter more when volatility is high.",
+  },
+  {
+    title: "A long horizon is its own tool",
+    text: "Longer holding periods reduce the influence of any single bad day or headline. Frequent in-and-out trading adds costs and mistakes instead of removing them.",
+  },
+  {
+    title: "Speculation and investing are different games",
+    text: "Speculation chases short-term price moves and accepts large swings. Investing, in the general sense, holds a diversified view over years. Confusing the two games is a common — and costly — mistake.",
+  },
+  {
+    title: "Past gains are context, never promises",
+    text: "Yesterday's winner can be tomorrow's laggard. Strong past returns are a reason to study an investment's history with scepticism, not a guarantee of what it returns next.",
+  },
+  {
+    title: "An unusual reading is a question, not a signal",
+    text: "A statistical anomaly — on this site or anywhere — flags behaviour that differs from its own recent history. It is a prompt to look closer, never an instruction to buy or sell.",
+  },
+];
+
+function initLearningCorner() {
+  const tipTitle = byId("tipTitle");
+  const tipText = byId("tipText");
+  const tipIndex = byId("tipIndex");
+  if (!tipTitle || !tipText) return;
+
+  // One tip per UTC calendar day; deterministic, so the same day always
+  // shows the same evergreen note.
+  const dayNumber = Math.floor(Date.now() / 86400000);
+  const tip = LEARNING_TIPS[dayNumber % LEARNING_TIPS.length];
+
+  tipTitle.textContent = tip.title;
+  tipText.textContent = tip.text;
+  if (tipIndex) {
+    tipIndex.textContent = `Tip ${(dayNumber % LEARNING_TIPS.length) + 1} of ${LEARNING_TIPS.length}`;
+  }
+}
+
+/* ==========================================================================
    Boot
    ========================================================================== */
 
 ready(() => {
+  initApiBaseLabel();
   initTheme();
   initNav();
   initAmbientCanvas();
   initPointerGlow();
   initCursorTrail();
   initHomepageButtons();
+  initLearningCorner();
 
   if (byId("overviewGrid")) {
     loadHomeIndices();
@@ -2490,7 +2669,4 @@ ready(() => {
     initStocksPage();
   }
 
-  if (byId("wishlistList")) {
-    initWishlistPage();
-  }
 });

@@ -16,4 +16,5 @@
  *     read-only, and the CORS allow-list lives on the backend instead
  *     (ALLOWED_ORIGINS environment variable documented in the README).
  */
+
 window.CDF_API_BASE = "http://localhost:8000";

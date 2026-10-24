@@ -15,7 +15,6 @@ detector or provider cannot answer, the UI says so instead of guessing.
 | `index.html` | Market overview: NSE index cards and market breadth from real `/api/indices` data |
 | `stocks.html` | NSE index explorer with constituent tables |
 | `stock-analysis.html` | The Stock Analyser: chart + indicators + anomaly detectors, timeframe switching (1D, 5D, 1M, 3M, 6M, 1Y, 5Y) |
-| `wishlist.html` | A small localStorage list of watched symbols (symbols only, never prices) |
 
 Detectors (all explainable, all with honest availability/limitation metadata):
 
@@ -33,11 +32,14 @@ Detectors (all explainable, all with honest availability/limitation metadata):
 
 ```
 backend/
-  main.py          FastAPI routes (health, market/history, market/oi, indices)
+  main.py          FastAPI routes (health, market/history, market/oi, indices,
+                   index constituents, news, feedback)
   market_data.py   Yahoo Finance provider + period/interval validation
   analysis.py      Indicators, detectors, historical walk-forward generators
   oi_data.py       Official NSE F&O bhavcopy parsing
-  tests/           pytest suite (endpoints + analysis + OI)
+  data/            Local data: feedback.jsonl (+ the leftover local app.db, gitignored)
+                   (never committed; *db also gitignored)
+  tests/           pytest suite (endpoints + analysis + OI + market data)
   requirements.txt Pinned dependencies
   Procfile         Production web process (Render/Railway/Koyeb-style hosts)
   .python-version  Python 3.12
@@ -46,9 +48,8 @@ frontend/
   index.html       Market overview
   stocks.html      Index explorer
   stock-analysis.html  The analyser page
-  wishlist.html    Watchlist
   config.js        The single place the backend URL (window.CDF_API_BASE) is set
-  script.js        Shared runtime: API base, theme, home/stocks/wishlist logic
+  script.js        Shared runtime: API base, theme, home/stocks logic
   analysis.js      Analyser page logic (requests, auto-complete, timeframes)
   chart-utils.js   Chart rendering, markers, request guard, URL builder
   style.css        Glassmorphism design system (dark + light themes)
@@ -91,7 +92,6 @@ Local pages:
 * <http://localhost:5500/>
 * <http://localhost:5500/stocks.html>
 * <http://localhost:5500/stock-analysis.html>
-* <http://localhost:5500/wishlist.html>
 
 Local backend health check (exact contract, do not change):
 
@@ -102,9 +102,28 @@ GET http://127.0.0.1:8000/api/health
 
 ## 6. Environment variables
 
+### 6a. Required for production
+
 | Variable | Where | Meaning |
 |---|---|---|
-| `ALLOWED_ORIGINS` | backend | Comma-separated list of frontend origins allowed by CORS. **Unset = any origin (the local-development default). Production must set it explicitly**, e.g. `ALLOWED_ORIGINS=https://your-frontend.vercel.app`. |
+| `ALLOWED_ORIGINS` | backend | **Must set in production.** Comma-separated list of frontend origins allowed by CORS. Unset = local dev only (localhost/127.0.0.1). Example: `https://your-site.vercel.app`. |
+| `PORT` | backend (host) | Procfile hosts supply it automatically via `$PORT`; only needed when running uvicorn by hand. |
+
+### 6b. Security hardening (recommended for production)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CDF_RATE_LIMIT_ENABLED` | `1` (on) | Per-IP request rate limiter. Set `0` to disable (only for local testing). |
+| `CDF_ENABLE_DOCS` | `1` (visible) | Set `0` to hide `/docs`, `/redoc` and `/openapi.json` on a public deployment. |
+| `CDF_FORCE_HSTS` | `0` (off) | Set `1` to add `Strict-Transport-Security` headers — only after the domain is HTTPS-only. |
+| `CDF_TRUST_PROXY_HEADERS` | `0` (off) | Set `1` on hosts (e.g. Render) whose proxy **always** rewrites `X-Forwarded-For`, so each real visitor gets their own rate-limit bucket. |
+| `CDF_TRUSTED_HOSTS` | unset | Comma-separated list of allowed `Host` header values (e.g. `your-backend.onrender.com`). Prevents host-header injection. |
+| `FEEDBACK_FILE` | `backend/data/feedback.jsonl` | Override the feedback storage path. On hosts with **ephemeral filesystems** (Render free tier) this file is **lost on every redeploy** — see Section 11 for the workaround. |
+
+### 6c. Market data providers (optional)
+
+| Variable | Where | Meaning |
+|---|---|---|
 | `CDF_TR_CACHE` | backend | `0`/`false`/`off` disables the Transformer result cache (default: enabled). |
 | `CDF_TR_CACHE_TTL` | backend | Transformer cache entry lifetime in seconds (default `900`). Correctness never depends on it: any new bar retrains via the cache key. |
 | `TWELVEDATA_API_KEY` | backend | Optional. Enables the Twelve Data provider. Server-side only. Free "Basic" plan: 8 credits/min, 800/day — **US markets/forex/crypto only; India needs a paid plan** (see Section 7). |
@@ -121,7 +140,6 @@ GET http://127.0.0.1:8000/api/health
 | `CDF_MARKET_CACHE_MAX_ENTRIES` | backend | Shared cache LRU bound (default `512`). |
 | `CDF_MARKET_STALE_FALLBACK` | backend | When every provider fails, serve an existing cache entry clearly labelled stale (default `1`). |
 | `CDF_MARKET_STALE_MAX_HOURS` | backend | Maximum age of a stale fallback payload in hours (default `24`). |
-| `PORT` | backend (host) | Procfile hosts supply it automatically; used by `$PORT` in the Procfile. |
 | — | frontend | There are **no secrets in the frontend**. The backend URL is the only frontend setting: `frontend/config.js` → `window.CDF_API_BASE`. |
 
 Copy `backend/.env.example` to `backend/.env` if you want file-based env config
@@ -220,48 +238,77 @@ python frontend\tests\check_frontend.py
 
 ## 9. Deployment architecture
 
-The frontend and backend are deployed **separately**:
+The backend serves the frontend **from the same origin** — this is the safest
+and simplest architecture:
 
-* **Frontend → Vercel** (user already has an account): fully static, free
-  Hobby tier serves it from the edge. The `frontend/` folder is the deploy
-  root (`vercel.json` inside only adds cache/security headers; there is no
-  build step).
-* **Backend → any Python host that runs a Procfile web process**
-  (Render, Railway, Koyeb, Fly.io, Northflank, …). The analysis is
-  CPU-heavy (see limitations), so the host needs to allow requests of at
-  least ~10–60 s and must not hard-kill CPU work.
+* **Backend → any Python host that runs a Procfile web process** (Render,
+  Railway, Koyeb, Fly.io, …). The backend's Procfile starts uvicorn, which
+  automatically serves the `frontend/` folder as static files from the same
+  URL. The frontend never touches localhost; it talks to its own origin.
+* **Frontend → Vercel** (optional, split deploy): keeps the static files
+  on the CDN edge for fastest load times, but requires setting `ALLOWED_ORIGINS`
+  on the backend and `window.CDF_API_BASE` in `config.js` to the backend's
+  public URL. The CORS allow-list on the backend is the security boundary.
+
+> **Free-tier warning:** Render free web services share 0.1 CPU / 512 MB,
+> sleep after 15 idle minutes (≈1 min wake-up), and have **ephemeral
+> filesystems** — `feedback.jsonl` is reset on every redeploy. See
+> Section 11 for the persistent-disk workaround.
 
 ## 10. Deployment commands
 
-### Frontend (Vercel, no build)
+### Option A — Single-origin (recommended for beginners)
 
-1. `cd frontend`
-2. Edit `config.js` → set `window.CDF_API_BASE` to the **public backend URL**.
-3. Deploy: Vercel dashboard → *New Project* → import this repo →
-   **Root Directory: `frontend`**, Framework: *Other*, no build command,
-   output directory `.` → Deploy.
-   (Or `npm i -g vercel && vercel --cwd frontend --prod`.)
-4. Note the produced URL (e.g. `https://your-site.vercel.app`) — this is the
-   value the backend's `ALLOWED_ORIGINS` needs.
-
-### Backend (Render example, Procfile host)
+Everything runs from one backend host; no `config.js` edit or CORS config
+needed.
 
 1. Push this repo to GitHub.
 2. Render dashboard → *New → Web Service* → connect the repo →
-   Root Directory: `backend`, Runtime: *Python 3*, instance type: Free.
-   Render reads `requirements.txt`, `.python-version` and the `Procfile`
-   automatically; no manual build/start commands needed.
-3. Add environment variable `ALLOWED_ORIGINS` = the frontend URL (from step 4
-   above; without a trailing slash).
-4. After deploy, verify `https://<backend-host>/api/health` returns the exact
-   health contract.
+   **Root Directory: `backend`** (not the repo root), Runtime: *Python 3*,
+   instance type: Free.
+   Render auto-detects `requirements.txt`, `.python-version` and the
+   `Procfile`; no manual build/start commands needed.
+3. After deploy, verify `https://<your-backend>.onrender.com/api/health`
+   returns `{"status":"success","message":"Clean Data Flow backend is running"}`.
+4. Open `https://<your-backend>.onrender.com/` in a browser — the frontend
+   loads from the same URL.
 
-### Order matters
+Optional hardening env vars to set in the Render dashboard:
 
-Deploy the backend first, set the backend URL in `frontend/config.js`,
-redeploy the frontend, then finish the backend's `ALLOWED_ORIGINS` with the
-final frontend URL. Both sides must agree or browsers will block the API
-calls (visible as "Cannot reach the … backend" messages).
+| Variable | Recommended value |
+|---|---|
+| `CDF_ENABLE_DOCS` | `0` (hides API docs from public) |
+| `CDF_FORCE_HSTS` | `1` (HTTPS-only browsers) |
+| `CDF_TRUST_PROXY_HEADERS` | `1` (Render's proxy always rewrites X-Forwarded-For) |
+| `CDF_TRUSTED_HOSTS` | `your-backend.onrender.com` |
+
+### Option B — Split deploy (Vercel frontend + Render backend)
+
+1. Deploy the **backend first** (same Render steps above).
+2. Note the backend URL (e.g. `https://clean-data-flow-api.onrender.com`).
+3. Edit `frontend/config.js` → change:
+   ```js
+   window.CDF_API_BASE = "https://clean-data-flow-api.onrender.com";
+   ```
+   ⚠️ **This is the most common deployment mistake.** If `config.js` still
+   says `http://localhost:8000` after you deploy the frontend, every browser
+   will fail to reach the backend.
+4. Deploy the **frontend**: Vercel dashboard → *New Project* → import this
+   repo → **Root Directory: `frontend`**, Framework: *Other*, no build
+   command, output directory `.` → Deploy.
+5. Note the frontend URL (e.g. `https://clean-data-flow.vercel.app`).
+6. In the **backend** Render dashboard, add the environment variable:
+   `ALLOWED_ORIGINS` = `https://clean-data-flow.vercel.app`
+   (no trailing slash; comma-separate if you have multiple URLs).
+   Redeploy the backend. Without this, browsers will block all API calls.
+7. Verify `https://clean-data-flow.vercel.app/` loads and the "Test backend
+   connection" button returns the health success message.
+
+### Order matters (split deploy only)
+
+Deploy backend → set `config.js` → deploy frontend → set `ALLOWED_ORIGINS`
+on backend → redeploy backend. Both sides must agree or browsers will block
+API calls ("Cannot reach the … backend" messages).
 
 ## 11. Common errors and fixes
 
@@ -273,6 +320,8 @@ calls (visible as "Cannot reach the … backend" messages).
 | `502` on `/api/market/history` | Every enabled market-data provider failed or is rate-limited; retry shortly. If an old cache entry exists, it is served clearly labelled `stale` (set `CDF_MARKET_STALE_FALLBACK=0` to restore the plain-502 behaviour). No dummy data is ever returned. |
 | `/api/market/oi` says data unavailable | True honesty: the official NSE F&O bhavcopy publishes after the session; weekends/holidays have no file. |
 | 5Y analysis very slow (Transformer) | First call per symbol/timeframe trains once (~6 s workstation); identical repeat calls are served from the result cache. Still slow every time? `CDF_TR_CACHE=0` may be set in the environment — see Section 12. |
+| `429 Too Many Requests` | The per-IP rate limiter is active (30 market requests/min, 5 feedback posts/min, 120 other API requests/min). Wait a moment and retry. On a shared office IP all users share one bucket. |
+| Feedback disappears after redeploy | The host filesystem is ephemeral (Render free tier). Set `FEEDBACK_FILE` to a path on a **persistent disk** (Render paid plan → Disks → mount at `/mnt/data`; set `FEEDBACK_FILE=/mnt/data/feedback.jsonl`). |
 
 ## 12. Known limitations
 

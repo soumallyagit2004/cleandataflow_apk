@@ -6,13 +6,16 @@
  * or anomaly value is generated on the client.
  *
  * The search stage exposes the symbol input (with autocomplete), exchange,
- * period, interval, the primary "Analyse Stock" action and a secondary Reset.
- * Results are revealed only after a successful backend response; the
- * pre-analysis panel contains no prices or scores.
+ * the primary "Analyse Stock" action and a secondary Reset. One Historical
+ * Window select inside the chart header controls both the chart data and the
+ * analysis data from the same fetch; a RequestGuard prevents stale responses
+ * from overwriting newer selections. Results are revealed only after a
+ * successful backend response; the pre-analysis panel contains no prices or
+ * scores.
  */
 
 const API_ROOT =
-  typeof API_BASE !== "undefined" ? API_BASE : "http://localhost:8000";
+  typeof API_BASE !== "undefined" ? API_BASE : "";
 const CU = typeof window !== "undefined" ? window.ChartUtils : null;
 const REQUEST_TIMEOUT_MS = 120000;
 let timedOut = false;
@@ -26,8 +29,8 @@ const els = {
   symbol: document.getElementById("symbolInput"),
   suggestions: document.getElementById("symbolSuggestionsPanel"),
   exchange: document.getElementById("exchangeSelect"),
-  period: document.getElementById("periodSelect"),
-  interval: document.getElementById("intervalSelect"),
+  windowSelect: document.getElementById("windowSelect"),
+  windowStatus: document.getElementById("windowStatus"),
   analyzeBtn: document.getElementById("analyzeBtn"),
   analyzeLabel: document.getElementById("analyzeBtnLabel"),
   resetBtn: document.getElementById("resetBtn"),
@@ -46,9 +49,6 @@ const els = {
   resultSource: document.getElementById("resultSource"),
   resultFetched: document.getElementById("resultFetched"),
   resultFreshness: document.getElementById("resultFreshness"),
-  timeframePanel: document.getElementById("timeframePanel"),
-  timeframeControls: document.getElementById("timeframeControls"),
-  timeframeStatus: document.getElementById("timeframeStatus"),
   metaPanel: document.getElementById("metaPanel"),
   metaList: document.getElementById("metaList"),
   metaBadge: document.getElementById("metaBadge"),
@@ -209,12 +209,8 @@ function setBusy(isBusy) {
   if (els.dashboardStage) {
     els.dashboardStage.setAttribute("aria-busy", String(Boolean(isBusy)));
   }
-  if (els.timeframeControls) {
-    els.timeframeControls
-      .querySelectorAll(".timeframe-btn")
-      .forEach((button) => {
-        button.disabled = Boolean(isBusy);
-      });
+  if (els.windowSelect) {
+    els.windowSelect.disabled = Boolean(isBusy);
   }
 }
 
@@ -227,73 +223,17 @@ function setSymbolInvalid(invalid) {
   }
 }
 
-function shortPeriodLabel(period) {
-  const custom = {
-    "2y": "2Y",
-    "10y": "10Y",
-    ytd: "YTD",
-    max: "MAX",
-  };
-  return custom[period] || CU.timeframeLabel(period);
-}
-
-function renderTimeframeOptions(interval, activePeriod) {
-  if (!els.timeframeControls || !CU) return;
-
-  const options = CU.timeframesForInterval(interval);
-  if (
-    activePeriod &&
-    CU.isCompatible(activePeriod, interval) &&
-    !options.some((option) => option.period === activePeriod)
-  ) {
-    options.push({
-      period: activePeriod,
-      label: shortPeriodLabel(activePeriod),
-      title: CU.periodLabel(activePeriod),
-    });
-  }
-  options.sort(
-    (a, b) => CU.PERIODS.indexOf(a.period) - CU.PERIODS.indexOf(b.period)
-  );
-
-  els.timeframeControls.innerHTML = options
-    .map((option) => {
-      const active = option.period === activePeriod;
-      return `<button
-        type="button"
-        class="timeframe-btn${active ? " active" : ""}"
-        data-period="${escapeAttr(option.period)}"
-        aria-pressed="${active ? "true" : "false"}"
-        title="Load ${escapeAttr(option.title)} for the current stock"
-      >${escapeHtml(option.label)}</button>`;
-    })
-    .join("");
-
-  setBusy(state.loading);
-}
-
-function markTimeframeActive(period) {
-  if (!els.timeframeControls) return;
-  els.timeframeControls
-    .querySelectorAll(".timeframe-btn")
-    .forEach((button) => {
-      const active = button.getAttribute("data-period") === period;
-      button.classList.toggle("active", active);
-      button.setAttribute("aria-pressed", String(active));
-    });
-}
-
-function setTimeframeStatus(kind, message) {
-  if (!els.timeframeStatus) return;
-  els.timeframeStatus.className = "timeframe-status";
+function setWindowStatus(kind, message) {
+  if (!els.windowStatus) return;
+  els.windowStatus.className = "window-status";
   if (!message) {
-    els.timeframeStatus.textContent = "";
-    els.timeframeStatus.classList.add("hidden");
+    els.windowStatus.textContent = "";
+    els.windowStatus.classList.add("hidden");
     return;
   }
-  els.timeframeStatus.textContent = message;
-  els.timeframeStatus.classList.add(kind);
-  els.timeframeStatus.classList.remove("hidden");
+  els.windowStatus.textContent = message;
+  els.windowStatus.classList.add(kind);
+  els.windowStatus.classList.remove("hidden");
 }
 
 function setChartRefreshing(refreshing) {
@@ -310,11 +250,15 @@ function setChartRefreshing(refreshing) {
    ========================================================================== */
 
 function selectionFromControls() {
+  const windowEntry =
+    CU.windowForId(els.windowSelect ? els.windowSelect.value : "") ||
+    CU.windowForId("3mo");
   return {
     symbol: els.symbol ? els.symbol.value.trim().toUpperCase() : "",
     exchange: els.exchange ? els.exchange.value : "NSE",
-    period: els.period ? els.period.value : "3mo",
-    interval: els.interval ? els.interval.value : "1d",
+    window: windowEntry.window,
+    period: windowEntry.period,
+    interval: windowEntry.interval,
   };
 }
 
@@ -324,8 +268,11 @@ function applySelection(selection) {
     els.symbol.value = selection.symbol;
   }
   if (els.exchange && selection.exchange) els.exchange.value = selection.exchange;
-  if (els.period && selection.period) els.period.value = selection.period;
-  if (els.interval && selection.interval) els.interval.value = selection.interval;
+  if (els.windowSelect) {
+    const windowId =
+      selection.window || (CU.windowFromPeriod(selection.period) || {}).window || "3mo";
+    els.windowSelect.value = windowId;
+  }
 }
 
 function syncUrl(selection) {
@@ -333,8 +280,8 @@ function syncUrl(selection) {
     const params = new URLSearchParams({
       symbol: selection.symbol,
       exchange: selection.exchange,
-      period: selection.period,
-      interval: selection.interval,
+      window:
+        selection.window || (CU.windowFromPeriod(selection.period) || {}).window || "3mo",
     });
     window.history.replaceState(
       null,
@@ -351,8 +298,7 @@ function restoreFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const selection = CU.selectionFromParams(params, {
     exchange: "NSE",
-    period: "3mo",
-    interval: "1d",
+    window: "3mo",
   });
 
   applySelection(selection);
@@ -381,8 +327,7 @@ function resetSearch() {
     setSymbolInvalid(false);
   }
   if (els.exchange) els.exchange.value = "NSE";
-  if (els.period) els.period.value = "3mo";
-  if (els.interval) els.interval.value = "1d";
+  if (els.windowSelect) els.windowSelect.value = "3mo";
 
   try {
     window.history.replaceState(null, "", window.location.pathname);
@@ -405,20 +350,17 @@ function autorunSelection(restored) {
     return;
   }
 
-  const reconciled = CU.reconcileSelection(
-    restored.period,
-    restored.interval,
-    "period"
-  );
+  // restoreFromUrl already reconciled the link into a valid daily window.
   const selection = {
     symbol: check.symbol,
     exchange: restored.exchange,
-    period: reconciled.period,
-    interval: reconciled.interval,
+    window: restored.window || "3mo",
+    period: restored.period,
+    interval: restored.interval,
   };
-  if (reconciled.changed) {
+  if (restored.notes && restored.notes.length) {
+    showSelectionNote(restored.notes.join(" "));
     applySelection(selection);
-    showSelectionNote(reconciled.message);
   }
   syncUrl(selection);
   runAnalysis(selection);
@@ -2130,7 +2072,6 @@ function clearResults() {
   }
   if (els.indicatorGrid) els.indicatorGrid.innerHTML = "";
   if (els.anomalyGrid) els.anomalyGrid.innerHTML = "";
-  if (els.timeframeControls) els.timeframeControls.innerHTML = "";
   if (els.resultTitle) els.resultTitle.textContent = "—";
   if (els.resultSub) {
     els.resultSub.textContent = "Symbol, exchange and provider will appear here.";
@@ -2152,7 +2093,7 @@ function clearResults() {
     els.resultFreshness.className = "freshness-pill";
     els.resultFreshness.removeAttribute("title");
   }
-  setTimeframeStatus("", "");
+  setWindowStatus("", "");
   setChartRefreshing(false);
   if (els.dashboardStage) els.dashboardStage.classList.add("hidden");
   if (els.preAnalysis) els.preAnalysis.classList.remove("hidden");
@@ -2178,7 +2119,7 @@ function renderResultSummary(data, selection, mapped) {
   if (els.resultSub) {
     els.resultSub.textContent = `${data.symbol || selection.symbol}${
       data.providerSymbol ? ` (${data.providerSymbol})` : ""
-    } · ${CU.periodLabel(selection.period)} of ${CU.intervalLabel(
+    } · ${CU.windowLabel(selection.window)} of ${CU.intervalLabel(
       data.interval || selection.interval
     )} bars`;
   }
@@ -2203,8 +2144,8 @@ function renderResultSummary(data, selection, mapped) {
     }
   }
   if (els.resultWindow) {
-    els.resultWindow.textContent = `${CU.periodLabel(
-      selection.period
+    els.resultWindow.textContent = `${CU.windowLabel(
+      selection.window
     )} · ${CU.intervalLabel(data.interval || selection.interval)}`;
   }
   if (els.resultSource) {
@@ -2272,12 +2213,11 @@ function renderResult(data, selection, mapped) {
     });
   }
 
-  renderTimeframeOptions(state.interval, selection.period);
-  setTimeframeStatus(
+  setWindowStatus(
     "success",
-    `Loaded ${CU.periodLabel(selection.period)} of ${
-      CU.intervalLabel(selection.interval)
-    } bars for ${selection.symbol} · ${mapped.bars.length} usable bar(s) drawn.`
+    `${CU.windowLabel(selection.window)} daily window loaded for ${
+      selection.symbol
+    } · ${mapped.bars.length} usable bar(s) drawn from ${mapped.total} returned.`
   );
   renderChart(data, mapped);
 }
@@ -2336,9 +2276,9 @@ async function runAnalysis(selection, options) {
 
   if (preserveResults) {
     setChartRefreshing(true);
-    setTimeframeStatus(
+    setWindowStatus(
       "loading",
-      `Loading ${CU.periodLabel(selection.period)} for ${
+      `Loading the ${CU.windowLabel(selection.window)} window for ${
         selection.symbol
       }… The current chart stays visible until the new response arrives.`
     );
@@ -2350,9 +2290,7 @@ async function runAnalysis(selection, options) {
   setBusy(true);
   setStatus(
     "loading",
-    `Fetching ${CU.periodLabel(selection.period)} of ${
-      CU.intervalLabel(selection.interval)
-    } bars for ${selection.symbol}…`
+    `Fetching the ${CU.windowLabel(selection.window)} window (daily bars) for ${selection.symbol}…`
   );
 
   const ticket = state.guard.begin();
@@ -2405,14 +2343,14 @@ async function runAnalysis(selection, options) {
     if (mapped.bars.length) {
       setStatus(
         "success",
-        `Analysis complete: ${mapped.bars.length} usable bar(s) drawn from ${mapped.total} returned for ${CU.periodLabel(
-          selection.period
-        )}.`
+        `Analysis complete: ${mapped.bars.length} usable bar(s) drawn from ${mapped.total} returned for the ${CU.windowLabel(
+          selection.window
+        )} window.`
       );
     } else {
-      setTimeframeStatus(
+      setWindowStatus(
         "warning",
-        `${CU.periodLabel(selection.period)} returned no usable OHLCV bars; nothing was drawn or invented.`
+        `The ${CU.windowLabel(selection.window)} window returned no usable OHLCV bars; nothing was drawn or invented.`
       );
       setStatus(
         "info",
@@ -2445,20 +2383,17 @@ async function runAnalysis(selection, options) {
     }
 
     if (preserveResults && previousSelection) {
-      markTimeframeActive(previousSelection.period);
-      setTimeframeStatus(
+      setWindowStatus(
         "error",
-        `Could not load ${CU.periodLabel(
-          selection.period
-        )}. The previous ${CU.periodLabel(
-          previousSelection.period
+        `Could not load the ${CU.windowLabel(selection.window)} window. The previous ${CU.windowLabel(
+          previousSelection.window
         )} chart is still shown. ${message}`
       );
     } else {
       if (els.preAnalysis) els.preAnalysis.classList.remove("hidden");
-      setTimeframeStatus(
+      setWindowStatus(
         "error",
-        `Could not load ${CU.periodLabel(selection.period)}. ${message}`
+        `Could not load the ${CU.windowLabel(selection.window)} window. ${message}`
       );
     }
     setStatus("error", message, retryFor(selection));
@@ -2505,19 +2440,8 @@ function wireEvents() {
 
     closeSuggestions();
 
-    const reconciled = CU.reconcileSelection(
-      selection.period,
-      selection.interval,
-      "period"
-    );
-    if (reconciled.changed) {
-      selection.period = reconciled.period;
-      selection.interval = reconciled.interval;
-      if (els.period) els.period.value = reconciled.period;
-      if (els.interval) els.interval.value = reconciled.interval;
-      showSelectionNote(reconciled.message);
-    }
-
+    // The window select already maps to a provider-supported daily pair, so no
+    // period/interval reconciliation is needed here.
     if (els.exchange) selection.exchange = els.exchange.value;
 
     syncUrl(selection);
@@ -2562,78 +2486,25 @@ function wireEvents() {
     if (wrapper && !wrapper.contains(event.target)) closeSuggestions();
   });
 
-  if (els.period) {
-    els.period.addEventListener("change", () => {
-      const reconciled = CU.reconcileSelection(
-        els.period.value,
-        els.interval.value,
-        "period"
-      );
-      if (reconciled.changed) {
-        els.interval.value = reconciled.interval;
-        showSelectionNote(reconciled.message);
-      } else {
-        hideSelectionNote();
-      }
-    });
-  }
+  if (els.windowSelect) {
+    els.windowSelect.addEventListener("change", () => {
+      if (state.loading) return;
+      if (!state.loadedSelection) return;
 
-  if (els.interval) {
-    els.interval.addEventListener("change", () => {
-      const reconciled = CU.reconcileSelection(
-        els.period.value,
-        els.interval.value,
-        "interval"
-      );
-      if (reconciled.changed) {
-        els.period.value = reconciled.period;
-        showSelectionNote(reconciled.message);
-      } else {
-        hideSelectionNote();
-      }
-    });
-  }
+      const windowEntry = CU.windowForId(els.windowSelect.value);
+      if (!windowEntry) return;
 
-  if (els.timeframeControls) {
-    els.timeframeControls.addEventListener("click", (event) => {
-      const button =
-        event.target && event.target.closest
-          ? event.target.closest(".timeframe-btn")
-          : null;
-      if (!button || button.disabled || state.loading) return;
-      if (!state.loadedSelection) {
-        setTimeframeStatus(
-          "warning",
-          "Run a stock analysis once before choosing a historical timeframe."
-        );
-        return;
-      }
+      if (windowEntry.window === state.loadedSelection.window) return;
 
-      const period = button.getAttribute("data-period");
-      if (!period || !CU.isCompatible(period, state.loadedSelection.interval)) {
-        setTimeframeStatus(
-          "error",
-          `${CU.periodLabel(
-            period
-          )} is not available with ${CU.intervalLabel(
-            state.loadedSelection.interval
-          )} bars. Choose another window.`
-        );
-        return;
-      }
-
-      if (period === state.loadedSelection.period) {
-        markTimeframeActive(period);
-        setTimeframeStatus(
-          "success",
-          `${CU.periodLabel(
-            period
-          )} is already loaded for ${state.loadedSelection.symbol}.`
-        );
-        return;
-      }
-
-      const nextSelection = { ...state.loadedSelection, period };
+      // One guarded fetch updates the chart and the analysis together; the
+      // RequestGuard in runAnalysis aborts any in-flight older request so a
+      // stale response can never overwrite the newer selection.
+      const nextSelection = {
+        ...state.loadedSelection,
+        window: windowEntry.window,
+        period: windowEntry.period,
+        interval: windowEntry.interval,
+      };
       runAnalysis(nextSelection, { preserveResults: true, force: true });
     });
   }

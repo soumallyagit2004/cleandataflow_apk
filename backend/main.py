@@ -1,7 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from collections import deque
+from math import ceil
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
 import re
 import urllib.request
@@ -13,7 +17,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple
 from market_data import (
     fetch_history,
     validate_period_interval,
@@ -33,7 +37,221 @@ from analysis import (
     calculate_historical_anomalies,
 )
 
-app = FastAPI()
+# --------------------------------------------------------------------------
+# Deployment configuration flags (honest defaults; see the README)
+# --------------------------------------------------------------------------
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
+
+
+# FastAPI's /docs and /openapi.json stay visible by default (helpful, honest
+# inspection); set CDF_ENABLE_DOCS=0 on a public deployment to hide them.
+_ENABLE_DOCS = _env_flag("CDF_ENABLE_DOCS", default=True)
+
+# Only meaningful once the domain is HTTPS-only: tells browsers to treat the
+# site as HTTPS-only from then on.
+_FORCE_HSTS = _env_flag("CDF_FORCE_HSTS", default=False)
+
+# Production processes sit behind the host's proxy. Opt in ONLY when the
+# proxy always overwrites X-Forwarded-For (Render's proxy and Caddy do):
+# then the rate limiter gives every real visitor their own allowance instead
+# of one shared bucket for the whole site.
+_TRUST_PROXY_HEADERS = _env_flag("CDF_TRUST_PROXY_HEADERS", default=False)
+
+
+class _SecurityHeadersMiddleware:
+    """Adds the browser-hardening headers the static site used to get from
+    vercel.json to EVERY response — JSON payloads, 429 replies and the static
+    files this process serves."""
+
+    _HEADERS = {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "X-Frame-Options": "SAMEORIGIN",
+    }
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        extra = dict(self._HEADERS)
+        if _FORCE_HSTS:
+            extra["Strict-Transport-Security"] = "max-age=31536000"
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                present = {name.decode("latin-1").lower() for name, _value in headers}
+                for name, value in extra.items():
+                    if name.lower() not in present:
+                        headers.append(
+                            (name.encode("latin-1"), value.encode("latin-1"))
+                        )
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+class RateLimitStore:
+    """Fixed-window counters, one bucket per (client, limit class). Kept
+    separate from the middleware so tests can exercise the decisions without
+    opening sockets."""
+
+    def __init__(self) -> None:
+        self._buckets: Dict[Tuple[str, str], deque] = {}
+        self._checks = 0
+
+    def check(
+        self,
+        key: str,
+        bucket: str,
+        limit: int,
+        window_seconds: int,
+        now_monotonic: float,
+    ) -> float | None:
+        """None = allowed. Otherwise the seconds until the window frees up."""
+        entry = self._buckets.get((key, bucket))
+        if entry is None:
+            entry = deque()
+            self._buckets[(key, bucket)] = entry
+        cutoff = now_monotonic - window_seconds
+        while entry and entry[0] <= cutoff:
+            entry.popleft()
+
+        self._checks += 1
+        if self._checks % 1024 == 0:
+            self._prune_empty()
+
+        if len(entry) >= limit:
+            return max(0.1, ceil(entry[0] + window_seconds - now_monotonic))
+        entry.append(now_monotonic)
+        return None
+
+    def _prune_empty(self) -> None:
+        stale = [key for key, entry in self._buckets.items() if not entry]
+        for key in stale:
+            self._buckets.pop(key, None)
+
+
+_RATE_LIMIT_ENABLED = _env_flag("CDF_RATE_LIMIT_ENABLED", default=True)
+
+# Per-client allowances (fixed windows of 60 seconds):
+_RL_FEEDBACK_POST = (5, 60)         # POST /api/feedback — writes to disk
+_RL_MARKET = (30, 60)               # /api/market/*, /api/indices*, /api/news — CPU-heavy
+_RL_API_DEFAULT = (120, 60)         # everything else under /api/
+
+
+def _classify_rate_limit(path: str, method: str):
+    """Return (bucket, limit, window_seconds) for a request, or None when the
+    request is exempt from rate limiting."""
+    if not path.startswith("/api/"):
+        return None                      # static pages and mounts never count
+    if path == "/api/health":
+        return None                      # keep the health contract open for monitors
+    if method == "OPTIONS":
+        return None                      # CORS preflights stay open
+    if path == "/api/feedback":
+        return ("feedback", _RL_FEEDBACK_POST[0], _RL_FEEDBACK_POST[1])
+    if (
+        path.startswith("/api/market/")
+        or path == "/api/indices"
+        or path.startswith("/api/indices/")
+        or path == "/api/news"
+    ):
+        return ("market", _RL_MARKET[0], _RL_MARKET[1])
+    return ("api", _RL_API_DEFAULT[0], _RL_API_DEFAULT[1])
+
+
+def _client_key(scope) -> str:
+    """Direct peer address by default; X-Forwarded-For only when the
+    deployment opted in via CDF_TRUST_PROXY_HEADERS=1."""
+    if _TRUST_PROXY_HEADERS:
+        for name, value in scope.get("headers") or []:
+            if name.decode("latin-1").lower() == "x-forwarded-for":
+                first_hop = value.decode("latin-1").split(",")[0].strip()
+                if first_hop:
+                    return f"ip:{first_hop}"
+                break
+    client = scope.get("client")
+    host = client[0] if client and client[0] else "unknown"
+    return f"ip:{host}"
+
+
+class RateLimitMiddleware:
+    """Per-IP fixed-window limiter for the JSON API. Fails open: any internal
+    error degrades to 'request allowed' so the limiter can never take the
+    deployment down. State is per-process; hosts must run exactly one
+    instance (see the README)."""
+
+    def __init__(self, app, enabled: bool | None = None, store=None):
+        self.app = app
+        self.enabled = _RATE_LIMIT_ENABLED if enabled is None else enabled
+        self.store = store if store is not None else RateLimitStore()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not self.enabled:
+            return await self.app(scope, receive, send)
+
+        allow = True
+        retry_after = None
+        try:
+            decision = _classify_rate_limit(
+                scope.get("path", ""), scope.get("method", "")
+            )
+            if decision is not None:
+                bucket = decision[0]
+                limit = decision[1]
+                window = decision[2]
+                retry_after = self.store.check(
+                    _client_key(scope), bucket, limit, window, time.monotonic()
+                )
+                allow = retry_after is None
+        except Exception:
+            allow = True  # fail open
+
+        if not allow:
+            response = JSONResponse(
+                status_code=429,
+                content={
+                    "status": "error",
+                    "detail": (
+                        "Too many requests from this address. Please wait a "
+                        "moment and try again."
+                    ),
+                },
+                headers={"Retry-After": str(max(1, int(retry_after or 0.0) + 1))},
+            )
+            return await response(scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
+# Middleware order (registration below): SecurityHeaders is added last, so it
+# runs first (outermost); inside it CORS answers browser preflights before the
+# limiter is consulted; the limiter's own 429 replies travel back out through
+# CORS (allow-origin headers intact) and get the security headers added.
+app = FastAPI(
+    docs_url="/docs" if _ENABLE_DOCS else None,
+    redoc_url="/redoc" if _ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if _ENABLE_DOCS else None,
+)
+
+app.add_middleware(RateLimitMiddleware)
+
+_trusted_hosts_env = (os.environ.get("CDF_TRUSTED_HOSTS") or "").strip()
+if _trusted_hosts_env:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=[
+            host.strip().lstrip(".") for host in _trusted_hosts_env.split(",") if host.strip()
+        ],
+    )
 
 
 def _parse_allowed_origins(raw: str | None) -> list[str]:
@@ -51,13 +269,39 @@ def _parse_allowed_origins(raw: str | None) -> list[str]:
     return [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
 
 
-app.add_middleware(
-    CORSMiddleware,
-    # This app exposes public read-only GET data; credentials are never needed.
-    allow_origins=_parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS")),
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"],
-)
+_allowed_origins = _parse_allowed_origins(os.environ.get("ALLOWED_ORIGINS"))
+
+# Local development origins (any port) used both for the unset-ALLOWED_ORIGINS
+# CORS default and for the Origin header CSRF check below.
+_LOCAL_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$")
+
+if _allowed_origins == ["*"]:
+    # Unset ALLOWED_ORIGINS = local development. Accounts use cookies, so the
+    # wildcard itself cannot be echoed for credentialed responses; instead any
+    # localhost/127.0.0.1 origin is matched explicitly. Production must set
+    # ALLOWED_ORIGINS to its real frontend origins.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[],
+        allow_origin_regex=_LOCAL_ORIGIN_RE.pattern,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        # Explicitly listed origins are echoed when credentials are included.
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["*"],
+    )
+
+# Registered last so it runs FIRST (outermost) and decorates every response —
+# including static files, 404s and rate-limit replies — with the same headers
+# the static site used to get from vercel.json.
+app.add_middleware(_SecurityHeadersMiddleware)
 
 NSE_BASE = "https://www.nseindia.com/api"
 NSE_HEADERS = {
@@ -470,3 +714,14 @@ def submit_feedback(payload: FeedbackPayload):
             "email subscription or a ticketing system."
         ),
     }
+
+
+# --------------------------------------------------------------------------
+# Serve frontend from the same origin (avoids CORS, cookie, and CSRF issues)
+# --------------------------------------------------------------------------
+# This must be added AFTER all API routes so they take precedence.
+# The frontend/ directory is at the repo root, one level up from backend/.
+_frontend_path = Path(__file__).resolve().parent.parent / "frontend"
+if _frontend_path.is_dir():
+    # Serve index.html for root and any non-API path (SPA-style fallback)
+    app.mount("/", StaticFiles(directory=_frontend_path, html=True), name="frontend")

@@ -17,3 +17,24 @@ Thumbs.db
 
 # Node (only used by some frontend tooling, none committed)
 node_modules/
+
+# Local account database (backend/data/app.db + WAL sidecar files)
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# The backend/ folder doubles as a local virtualenv; its site-packages must
+# never be committed (dependencies come from requirements.txt instead).
+backend/.venv/
+backend/Lib/
+backend/Scripts/
+backend/pyvenv.cfg
+pyvenv.cfg
+
+# Test and runtime outputs
+backend/test_output.txt
+backend/test_run.txt
+*.log
+
+# Feedback and runtime user data
+backend/data/*.jsonl
