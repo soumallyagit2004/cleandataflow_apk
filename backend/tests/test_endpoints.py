@@ -643,3 +643,33 @@ class TestHistoricalAnomalyEndpoint:
             for point in block["points"]:
                 assert point["timestamp"] in returned
                 assert point["is_anomaly"] is True
+
+
+class TestStaticFileServing:
+    def test_root_serves_index_html(self):
+        response = client.get("/")
+        assert response.status_code == 200
+        assert "Clean Data Flow" in response.text
+        assert "html" in response.headers.get("content-type", "").lower()
+
+    def test_stocks_page_serves_html(self):
+        response = client.get("/stocks.html")
+        assert response.status_code == 200
+        assert "Stocks" in response.text
+
+    def test_stock_analysis_page_serves_html(self):
+        response = client.get("/stock-analysis.html")
+        assert response.status_code == 200
+        assert "Stock Analysis" in response.text
+
+    def test_config_js_serves_javascript(self):
+        response = client.get("/config.js")
+        assert response.status_code == 200
+        assert "CDF_API_BASE" in response.text
+
+    def test_health_api_route_takes_precedence_over_static(self):
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+

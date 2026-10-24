@@ -314,8 +314,8 @@ API calls ("Cannot reach the … backend" messages).
 
 | Symptom | Fix |
 |---|---|
-| Page says "Cannot reach the FastAPI backend at http://localhost:8000 …" locally | The backend is not running: start it with the Section-5 uvicorn command. |
-| Same message on the deployed site | `config.js` still points at localhost — change `window.CDF_API_BASE` to the public backend URL and redeploy the frontend. |
+| Page says "Cannot reach the FastAPI backend …" locally | The backend is not running: start it with the Section-5 uvicorn command. |
+| Page says "Cannot reach the backend service" on deployed site | The Render backend may be sleeping or restarting. For split deploys (Option B), verify `config.js` points to the public backend URL and `ALLOWED_ORIGINS` is configured. Single-origin (Option A) uses same-origin relative URLs automatically. |
 | API calls blocked by CORS | The backend's `ALLOWED_ORIGINS` does not contain the frontend URL. Set it (comma-separate multiple) and redeploy the backend. |
 | `502` on `/api/market/history` | Every enabled market-data provider failed or is rate-limited; retry shortly. If an old cache entry exists, it is served clearly labelled `stale` (set `CDF_MARKET_STALE_FALLBACK=0` to restore the plain-502 behaviour). No dummy data is ever returned. |
 | `/api/market/oi` says data unavailable | True honesty: the official NSE F&O bhavcopy publishes after the session; weekends/holidays have no file. |

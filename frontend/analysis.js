@@ -2369,10 +2369,17 @@ async function runAnalysis(selection, options) {
       message =
         "The request was cancelled before a response arrived. No stale response was applied.";
     } else if (error instanceof TypeError) {
+      const isLocalHost =
+        typeof window !== "undefined" &&
+        window.location &&
+        (window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1" ||
+          window.location.protocol === "file:");
       const localBackend = /(localhost|127\.0\.0\.1)([:\/]|$)/.test(API_ROOT);
-      message = localBackend
-        ? `Cannot reach the FastAPI backend at ${API_ROOT}. Start it with: cd backend, then python -m uvicorn main:app --host 127.0.0.1 --port 8000`
-        : `Cannot reach the analysis backend at ${API_ROOT}. Check the configured backend URL (window.CDF_API_BASE in config.js) and that the backend deployment is online.`;
+      message =
+        isLocalHost && (localBackend || !API_ROOT)
+          ? `Cannot reach the local backend at ${API_ROOT || "http://localhost:8000"}. Start it with: cd backend, then python -m uvicorn main:app --host 127.0.0.1 --port 8000`
+          : "Cannot reach the analysis backend service. The server may be waking up or temporarily unavailable. Please try again shortly.";
     } else if (error && error.status === 502) {
       message = `The backend is running, but the upstream market-data provider failed: ${error.message} No prices were invented.`;
     } else {

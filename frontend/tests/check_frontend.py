@@ -249,8 +249,8 @@ def main() -> int:
     # ------------------------------------------------------------------
     config = (ROOT / "config.js").read_text(encoding="utf-8")
 
-    # config.js has exactly one assignment target: the backend URL. Anything
-    # else (keys, tokens, secrets) would be a regression.
+    # config.js sets window.CDF_API_BASE dynamically for production and dev.
+    # Anything else (keys, tokens, secrets) would be a regression.
     extra_config_lines = [
         line
         for line in config.splitlines()
@@ -260,7 +260,19 @@ def main() -> int:
     assert not extra_config_lines, (
         f"config.js must only set CDF_API_BASE: {extra_config_lines}"
     )
-    assert 'window.CDF_API_BASE = "http://localhost:8000"' in config
+    assert "window.CDF_API_BASE = " in config
+    # Ensure production does not have a hardcoded unconditional localhost:8000 assignment
+    assert 'window.CDF_API_BASE = "http://localhost:8000";' not in config, (
+        "config.js must not unconditionally hardcode localhost:8000"
+    )
+
+    # HTML files must not contain hardcoded localhost in markup
+    for html_file in ROOT.glob("*.html"):
+        html_text = html_file.read_text(encoding="utf-8")
+        assert "http://localhost:8000" not in html_text, (
+            f"hardcoded localhost:8000 found in {html_file.name}"
+        )
+
 
     # The removed pages must stay removed, and no surviving file may still
     # point at them or at the removed backend endpoints.

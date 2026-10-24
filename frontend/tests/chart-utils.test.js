@@ -327,6 +327,85 @@ test("buildHistoryUrl sends the selected parameters", () => {
   assert.equal(new URL(withoutAnalysis).searchParams.get("analyze"), "false");
 });
 
+test("buildHistoryUrl supports same-origin relative base for production", () => {
+  const url = CU.buildHistoryUrl("", {
+    symbol: "RELIANCE",
+    exchange: "NSE",
+    period: "6mo",
+    interval: "1d",
+  });
+  assert.equal(url.startsWith("/api/market/history?"), true);
+  const parsed = new URL(url, "https://cleandataflow.onrender.com");
+  assert.equal(parsed.origin, "https://cleandataflow.onrender.com");
+  assert.equal(parsed.pathname, "/api/market/history");
+  assert.equal(parsed.searchParams.get("symbol"), "RELIANCE");
+  assert.equal(parsed.searchParams.get("exchange"), "NSE");
+  assert.equal(parsed.searchParams.get("period"), "6mo");
+  assert.equal(parsed.searchParams.get("interval"), "1d");
+  assert.equal(parsed.searchParams.get("analyze"), "true");
+});
+
+test("config.js resolves same-origin relative URLs in production and preserves local dev", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const vm = require("node:vm");
+
+  const configPath = path.resolve(__dirname, "..", "config.js");
+  const configCode = fs.readFileSync(configPath, "utf-8");
+
+  // 1. Production on Render (e.g. cleandataflow.onrender.com)
+  const renderSandbox = {
+    window: {
+      location: {
+        protocol: "https:",
+        hostname: "cleandataflow.onrender.com",
+        port: "",
+      },
+    },
+  };
+  vm.runInNewContext(configCode, renderSandbox);
+  assert.equal(renderSandbox.window.CDF_API_BASE, "");
+
+  // 2. Unified local server (port 8000)
+  const localUnifiedSandbox = {
+    window: {
+      location: {
+        protocol: "http:",
+        hostname: "localhost",
+        port: "8000",
+      },
+    },
+  };
+  vm.runInNewContext(configCode, localUnifiedSandbox);
+  assert.equal(localUnifiedSandbox.window.CDF_API_BASE, "");
+
+  // 3. Standalone local frontend dev server (e.g. VS Code Live Server on 5500)
+  const localSeparateSandbox = {
+    window: {
+      location: {
+        protocol: "http:",
+        hostname: "localhost",
+        port: "5500",
+      },
+    },
+  };
+  vm.runInNewContext(configCode, localSeparateSandbox);
+  assert.equal(localSeparateSandbox.window.CDF_API_BASE, "http://localhost:8000");
+
+  // 4. File protocol
+  const fileSandbox = {
+    window: {
+      location: {
+        protocol: "file:",
+        hostname: "",
+        port: "",
+      },
+    },
+  };
+  vm.runInNewContext(configCode, fileSandbox);
+  assert.equal(fileSandbox.window.CDF_API_BASE, "http://localhost:8000");
+});
+
 test("timestamp parsing accepts ISO strings, seconds and milliseconds", () => {
   const iso = "2026-10-18T18:30:00Z";
   assert.equal(CU.parseTimestamp(iso), Math.floor(Date.parse(iso) / 1000));

@@ -22,11 +22,23 @@ const API_BASE = (() => {
   return base.replace(/\/+$/, "");
 })();
 
-/* Contextual message for an unreachable backend: the terminal command is only
-   useful for local development; deployed sites are same-origin by default. */
-const API_HELP = /(localhost|127\.0\.0\.1)([:\/]|$)/.test(API_BASE)
-  ? "Start the backend in a second terminal:  cd backend  then  python -m uvicorn main:app --host 127.0.0.1 --port 8000"
-  : "The frontend should be served by (or pointed at) the backend deployment; check that it is online (see frontend/config.js).";
+function isLocalEnvironment() {
+  if (typeof window === "undefined" || !window.location) return false;
+  const h = window.location.hostname;
+  return h === "localhost" || h === "127.0.0.1" || window.location.protocol === "file:";
+}
+
+function getBackendHelp() {
+  const isLocalHost = isLocalEnvironment();
+  const isLocalBackend = !API_BASE || /(localhost|127\.0\.0\.1)([:\/]|$)/.test(API_BASE);
+
+  if (isLocalHost && isLocalBackend) {
+    return "Start the backend in a second terminal:  cd backend  then  python -m uvicorn main:app --host 127.0.0.1 --port 8000";
+  }
+  return "The backend service may be waking up from sleep or temporarily offline. Please try again shortly.";
+}
+
+const API_HELP = getBackendHelp();
 
 /* ==========================================================================
    Small helpers
@@ -453,9 +465,10 @@ function describeRequestError(error, endpointLabel) {
   }
 
   if (error instanceof TypeError) {
+    const target = API_BASE ? `at ${API_BASE}` : "(same origin)";
     return {
       message: "Cannot reach the FastAPI backend.",
-      detail: `Expected ${API_BASE}. ${API_HELP}`,
+      detail: `Could not connect ${target}. ${getBackendHelp()}`,
     };
   }
 
@@ -489,7 +502,10 @@ function initApiBaseLabel() {
   const label = byId("apiBaseLabel");
   if (!label) return;
   label.textContent =
-    API_BASE || "the same origin this page is served from";
+    API_BASE ||
+    (typeof window !== "undefined" && window.location && window.location.origin
+      ? window.location.origin
+      : "same origin");
 }
 
 /* ==========================================================================
@@ -2051,7 +2067,9 @@ function initFeedbackForm() {
       console.error("Feedback submission failed:", error);
       let detail = error && error.message ? error.message : "The request failed.";
       if (error instanceof TypeError) {
-        detail = `Cannot reach the FastAPI backend at ${API_BASE}. Your feedback was not submitted.`;
+        detail = isLocalEnvironment()
+          ? `Cannot reach the local FastAPI backend. Start it in a second terminal: cd backend then python -m uvicorn main:app --host 127.0.0.1 --port 8000. Your feedback was not submitted.`
+          : "Cannot reach the backend service. The server may be waking up or temporarily offline. Your feedback was not submitted. Please try again shortly.";
       } else if (error && error.name === "TimeoutError") {
         detail = "The backend did not answer in time. Your feedback was not submitted.";
       }
@@ -2556,7 +2574,8 @@ function initHomepageButtons() {
         responseDiv.textContent = JSON.stringify(data, null, 2);
         responseDiv.className = "response-box success";
       } catch (error) {
-        responseDiv.textContent = `Error: Could not connect to ${API_BASE}.`;
+        const dest = API_BASE || (typeof window !== "undefined" && window.location && window.location.origin ? window.location.origin : "same origin");
+        responseDiv.textContent = `Error: Could not connect to backend at ${dest}. ${getBackendHelp()}`;
         responseDiv.className = "response-box error";
         console.error(error);
       }
