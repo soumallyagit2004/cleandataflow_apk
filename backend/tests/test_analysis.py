@@ -14,7 +14,7 @@ from analysis import (
     calculate_divergence,
     calculate_ema_deviation,
     calculate_lof_anomaly,
-    calculate_autoencoder_anomaly,
+    calculate_bollinger_bands,
     calculate_transformer_anomaly,
     calculate_volume_spike,
     calculate_volatility_anomaly,
@@ -815,12 +815,11 @@ class TestLOFAnomaly:
         assert "not proof of market manipulation" in result["explanation"]
 
 
-class TestAutoEncoderAnomaly:
-    """Autoencoder reconstruction-error scoring of the latest bar."""
+class TestBollingerBands:
+    """Bollinger Bands indicator and squeeze/breakout detector tests."""
 
     @staticmethod
     def _make_bars(count: int = 41, seed: int = 11) -> list[dict[str, Any]]:
-        """Deterministic pseudo-random OHLCV series (no network needed)."""
         rng = random.Random(seed)
         bars = []
         price = 100.0
@@ -846,146 +845,85 @@ class TestAutoEncoderAnomaly:
 
         return bars
 
-    def test_normal_dataset_not_flagged(self):
-        """A typical latest bar in a well-populated history is not an outlier."""
-        bars = self._make_bars()
-        result = calculate_autoencoder_anomaly(bars)
+    def test_normal_dataset_computes_bands_and_percent_b(self):
+        """A normal series returns upper, middle, lower bands and valid %B."""
+        bars = self._make_bars(30)
+        result = calculate_bollinger_bands(bars)
 
         assert result["available"] is True
-        assert result["is_anomaly"] is False
-        assert result["reconstruction_error"] <= result["threshold"]
-        assert result["history_observations"] == len(bars) - 2
+        assert result["period"] == 20
+        assert result["multiplier"] == 2.0
+        assert result["upper"] > result["middle"] > result["lower"]
+        assert result["bandwidth"] > 0
+        assert isinstance(result["percent_b"], float)
         assert result["evaluated_timestamp"] == bars[-1]["timestamp"]
-        assert result["features_used"] == [
-            "price_return_pct",
-            "volume_change_pct",
-            "true_range_pct",
-        ]
-        assert set(result["latest_features"].keys()) == set(result["features_used"])
-        assert "no future data" in result["explanation"]
+        assert result["history_observations"] == 30
+        assert "Bollinger Bands" in result["explanation"]
 
-    def test_injected_anomaly_flagged(self):
-        """A large price jump, volume surge and wide range is detected."""
-        bars = self._make_bars()
-        latest = bars[-1]
-        latest["close"] = latest["close"] * 1.25
-        latest["high"] = latest["close"] * 1.02
-        latest["low"] = latest["close"] * 0.98
-        latest["volume"] = latest["volume"] * 30
-
-        result = calculate_autoencoder_anomaly(bars)
+    def test_breakout_upper(self):
+        """A sharp upward jump flags a breakout above the upper band."""
+        bars = self._make_bars(30)
+        bars[-1]["close"] = 150.0
+        bars[-1]["high"] = 155.0
+        result = calculate_bollinger_bands(bars)
 
         assert result["available"] is True
         assert result["is_anomaly"] is True
-        assert result["reconstruction_error"] > result["threshold"]
-        assert "not proof of market manipulation" in result["explanation"]
+        assert result["signal"] in ("above_upper", "breakout_upper")
+        assert result["percent_b"] > 1.0
+
+    def test_breakout_lower(self):
+        """A sharp downward dump flags a breakout below the lower band."""
+        bars = self._make_bars(30)
+        bars[-1]["close"] = 50.0
+        bars[-1]["low"] = 45.0
+        result = calculate_bollinger_bands(bars)
+
+        assert result["available"] is True
+        assert result["is_anomaly"] is True
+        assert result["signal"] in ("below_lower", "breakout_lower")
+        assert result["percent_b"] < 0.0
+
+    def test_squeeze_detected(self):
+        """When bandwidth is in its lowest percentile, a squeeze is flagged."""
+        bars = self._make_bars(30)
+        last_stamp = datetime.fromisoformat(bars[-1]["timestamp"].replace("Z", "+00:00"))
+        tight_price = bars[-1]["close"]
+        for i in range(1, 15):
+            stamp = (last_stamp + timedelta(days=i)).isoformat().replace("+00:00", "Z")
+            bars.append({
+                "timestamp": stamp,
+                "open": tight_price,
+                "high": tight_price + 0.01,
+                "low": tight_price - 0.01,
+                "close": tight_price,
+                "volume": 1000,
+            })
+
+        result = calculate_bollinger_bands(bars)
+        assert result["available"] is True
+        assert result["squeeze"] is True
+        assert "squeeze" in result["signal"].lower()
+        assert result["squeeze_lookback"] == min(len(bars) - 19, 120)
 
     def test_insufficient_history(self):
-        """Too few bars returns an honest unavailable result."""
-        result = calculate_autoencoder_anomaly(self._make_bars(10))
-
+        """Fewer than 20 bars returns honest unavailable."""
+        result = calculate_bollinger_bands(self._make_bars(15))
         assert result["available"] is False
-        assert result["is_anomaly"] is None
-        assert result["reconstruction_error"] is None
-        assert result["threshold"] is None
-        assert "Insufficient history" in result["explanation"]
-        assert result["history_observations"] < 15
+        assert result["upper"] is None
+        assert result["middle"] is None
+        assert result["lower"] is None
+        assert result["percent_b"] is None
+        assert "At least 20 bars" in result["explanation"]
 
-    def test_missing_and_invalid_values(self):
-        """Missing lows and a missing latest volume are handled honestly."""
-        bars = self._make_bars()
-        for bar in bars:
-            bar["low"] = None
-        result = calculate_autoencoder_anomaly(bars)
-        assert result["available"] is False
-        assert "No usable consecutive OHLCV observations" in result["explanation"]
-
-        bars = self._make_bars()
-        bars[-1]["volume"] = None
-        result = calculate_autoencoder_anomaly(bars)
-        assert result["available"] is True
-        assert result["excluded_trailing_bars"] == 1
-        assert result["evaluated_timestamp"] == bars[-2]["timestamp"]
-        assert "trailing returned bar" in result["explanation"]
-
-        bars = self._make_bars()
-        bars[-1]["close"] = float("nan")
-        result = calculate_autoencoder_anomaly(bars)
-        assert result["available"] is True
-        assert result["excluded_trailing_bars"] == 1
-        assert isinstance(result["is_anomaly"], bool)
-
-    def test_constant_features(self):
-        """A flat series has no usable variance for the autoencoder."""
-        bars = []
-        start = datetime(2026, 2, 1, tzinfo=timezone.utc)
-        for index in range(30):
-            stamp = (start + timedelta(days=index)).isoformat().replace("+00:00", "Z")
-            bars.append(
-                {
-                    "timestamp": stamp,
-                    "open": 100.0,
-                    "high": 100.5,
-                    "low": 99.5,
-                    "close": 100.0,
-                    "volume": 1000,
-                }
-            )
-
-        result = calculate_autoencoder_anomaly(bars)
-
-        assert result["available"] is False
-        assert result["is_anomaly"] is None
-        assert "constant" in result["explanation"]
-
-    def test_invalid_hidden_layers(self):
-        """Invalid hidden layer sizes are rejected."""
-        bars = self._make_bars()
-
-        for bad_layers in ((), [], [0], [-1], "8,4,8", None, True, [1.5]):
-            result = calculate_autoencoder_anomaly(bars, hidden_layers=bad_layers)
-            assert result["available"] is False, bad_layers
-            assert result["explanation"]
-
-    def test_deterministic_output(self):
-        """The same input produces the same output every time."""
-        bars = self._make_bars()
-        first = calculate_autoencoder_anomaly(bars)
-        second = calculate_autoencoder_anomaly(bars)
-
-        assert first["available"] is True
-        assert first["reconstruction_error"] == second["reconstruction_error"]
-        assert first["threshold"] == second["threshold"]
-        assert first["is_anomaly"] == second["is_anomaly"]
-        assert first["latest_features"] == second["latest_features"]
-        assert first["explanation"] == second["explanation"]
-
-    def test_latest_bar_is_excluded_from_training(self):
-        """The latest bar is excluded from fitting; history count proves it."""
-        bars = self._make_bars(41)
-        result = calculate_autoencoder_anomaly(bars)
-
-        assert result["available"] is True
-        assert result["history_observations"] == 39  # 41 bars -> 40 rows, 39 historical
-        assert result["evaluated_timestamp"] == bars[-1]["timestamp"]
-        assert "trained only on" in result["explanation"]
-        assert "scored separately" in result["explanation"]
-
-    def test_trailing_incomplete_bar_is_excluded_not_blocking(self):
-        """Yahoo's partial latest bar must not disable reconstruction scoring."""
-        complete = calculate_autoencoder_anomaly(self._make_bars(41))
-        assert complete["available"] is True
-        assert complete["excluded_trailing_bars"] == 0
-
-        bars = self._make_bars(41)
+    def test_trailing_incomplete_bar_excluded(self):
+        """Yahoo's partial latest bar is excluded, scoring the latest complete bar."""
+        bars = self._make_bars(25)
         bars[-1]["close"] = None
-        result = calculate_autoencoder_anomaly(bars)
-
+        result = calculate_bollinger_bands(bars)
         assert result["available"] is True
         assert result["excluded_trailing_bars"] == 1
         assert result["evaluated_timestamp"] == bars[-2]["timestamp"]
-        assert result["history_observations"] == len(bars) - 3
-        assert "trailing returned bar" in result["explanation"]
 
 
 class TestTransformerAnomaly:
@@ -1253,18 +1191,14 @@ class TestHistoricalAnomalies:
             assert point["threshold"] is not None
             assert point["score_label"] == "LOF score"
 
-        for key in ("autoencoder_anomaly", "transformer_anomaly"):
-            block = result["detectors"][key]
-            assert block["available"] is False
-            assert block["historical_available"] is False
-            assert block["scope"] == "latest_only"
-            assert block["points"] == []
-            assert block["limitations"]
-            assert "latest-complete-bar" in block["reason"]
-        assert set(result["latest_only_detectors"]) == {
-            "autoencoder_anomaly",
-            "transformer_anomaly",
-        }
+        block = result["detectors"]["transformer_anomaly"]
+        assert block["available"] is False
+        assert block["historical_available"] is False
+        assert block["scope"] == "latest_only"
+        assert block["points"] == []
+        assert block["limitations"]
+        assert "latest-complete-bar" in block["reason"]
+        assert result["latest_only_detectors"] == ["transformer_anomaly"]
 
     def test_historical_results_are_causal_when_future_bars_are_removed(self):
         bars = self._bars()
@@ -1301,9 +1235,8 @@ class TestHistoricalAnomalies:
             assert block["available"] is False
             assert block["points"] == []
             assert block["reason"]
-        for key in ("autoencoder_anomaly", "transformer_anomaly"):
-            assert result["detectors"][key]["scope"] == "latest_only"
-            assert result["detectors"][key]["points"] == []
+        assert result["detectors"]["transformer_anomaly"]["scope"] == "latest_only"
+        assert result["detectors"]["transformer_anomaly"]["points"] == []
 
     def test_missing_timestamps_and_values_do_not_create_points(self):
         bars = self._bars()
@@ -1312,7 +1245,7 @@ class TestHistoricalAnomalies:
         result = calculate_historical_anomalies(bars)
 
         for key, block in result["detectors"].items():
-            if key in ("autoencoder_anomaly", "transformer_anomaly"):
+            if key == "transformer_anomaly":
                 continue
             for point in block["points"]:
                 assert point["timestamp"]

@@ -18,12 +18,12 @@ detector or provider cannot answer, the UI says so instead of guessing.
 
 Detectors (all explainable, all with honest availability/limitation metadata):
 
-* SMA, RSI, Fibonacci retracement
+* SMA, EMA, RSI, Fibonacci retracement, Bollinger Bands (with squeeze detection and breakout markers)
 * EMA Deviation
 * Volume Spike, Volatility Anomaly, Volume-Price Divergence —
-  **and walk-forward historical versions** of these three that mark the exact
+  **and walk-forward historical versions** of these indicators that mark the exact
   historical candles, causally
-* Local Outlier Factor (LOF), Autoencoder, Transformer anomaly —
+* Local Outlier Factor (LOF), Transformer anomaly (loaded via Phase 2) —
   latest-complete-bar only (declared honestly on the page)
 * NSE open interest via the official NSE F&O end-of-day bhavcopy
   (`/api/market/oi`)
@@ -325,9 +325,10 @@ API calls ("Cannot reach the … backend" messages).
 
 ## 12. Known limitations
 
-* **Latest-only neural detectors.** Autoencoder and Transformer score only the
+* **Latest-only neural detector.** The Transformer scores only the
   latest complete bar (retraining per historical candle would be prohibitively
-  expensive). The analyser labels them clearly.
+  expensive). It loads via a non-blocking Phase 2 background request so chart and
+  indicators appear instantly. The analyser labels it clearly.
 * **Transformer cost.** ~6 s of CPU on a workstation per analysed symbol for
   extended timeframes (history capped at 180 bars; extended-history requests
   use a reduced 120-epoch budget so totals stay bounded).

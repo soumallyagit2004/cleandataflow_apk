@@ -85,15 +85,15 @@ class TestMarketHistorySuccess:
         assert "features_used" in lof
         assert lof["explanation"]
 
-        # New: Autoencoder anomaly (only one bar, so it must be honestly unavailable)
-        assert "autoencoder_anomaly" in analysis
-        ae = analysis["autoencoder_anomaly"]
-        assert ae["available"] is False
-        assert ae["is_anomaly"] is None
-        assert ae["reconstruction_error"] is None
-        assert ae["threshold"] is None
-        assert "features_used" in ae
-        assert ae["explanation"]
+        # Bollinger Bands (only one bar, so it must be honestly unavailable)
+        assert "bollinger_bands" in analysis
+        bb = analysis["bollinger_bands"]
+        assert bb["available"] is False
+        assert bb["is_anomaly"] is None
+        assert bb["upper"] is None
+        assert bb["middle"] is None
+        assert bb["lower"] is None
+        assert bb["explanation"]
 
         # New: Transformer anomaly (only one bar, so it must be honestly unavailable)
         assert "transformer_anomaly" in analysis
@@ -185,13 +185,13 @@ class TestMarketHistorySuccess:
             "volume_spike",
             "volatility_anomaly",
             "lof_anomaly",
-            "autoencoder_anomaly",
+            "bollinger_bands",
             "transformer_anomaly",
         }
 
     @patch("main.fetch_history")
-    def test_autoencoder_analysis_reuses_fetched_bars(self, mock_fetch):
-        """Autoencoder must use the single fetched bar block, never refetch data."""
+    def test_bollinger_bands_analysis_reuses_fetched_bars(self, mock_fetch):
+        """Bollinger Bands must use the single fetched bar block, never refetch data."""
         bars = []
         for index in range(40):
             close = 100.0 + 5.0 * math.sin(index / 3.0)
@@ -224,20 +224,15 @@ class TestMarketHistorySuccess:
 
         assert response.status_code == 200
         assert mock_fetch.call_count == 1
-        ae = response.json()["analysis"]["autoencoder_anomaly"]
-        assert ae["available"] is True
-        assert isinstance(ae["is_anomaly"], bool)
-        assert isinstance(ae["reconstruction_error"], (int, float))
-        assert isinstance(ae["threshold"], (int, float))
-        assert ae["features_used"] == [
-            "price_return_pct",
-            "volume_change_pct",
-            "true_range_pct",
-        ]
-        assert ae["history_observations"] == 38
-        assert ae["hidden_layers"] == [8, 4, 8]
-        assert ae["evaluated_timestamp"] == bars[-1]["timestamp"]
-        assert "no future data" in ae["explanation"]
+        bb = response.json()["analysis"]["bollinger_bands"]
+        assert bb["available"] is True
+        assert isinstance(bb["is_anomaly"], bool)
+        assert bb["upper"] > bb["middle"] > bb["lower"]
+        assert bb["period"] == 20
+        assert bb["multiplier"] == 2.0
+        assert isinstance(bb["percent_b"], float)
+        assert bb["evaluated_timestamp"] == bars[-1]["timestamp"]
+        assert "Bollinger Bands" in bb["explanation"]
 
     @patch("main.fetch_history")
     def test_transformer_analysis_reuses_fetched_bars(self, mock_fetch):
@@ -564,7 +559,7 @@ class TestTrailingIncompleteBarIntegration:
         assert response.status_code == 200
         assert mock_fetch.call_count == 1
         analysis = response.json()["analysis"]
-        for key in ("lof_anomaly", "autoencoder_anomaly", "transformer_anomaly"):
+        for key in ("lof_anomaly", "transformer_anomaly"):
             block = analysis[key]
             assert block["available"] is True, key
             assert block["evaluated_timestamp"] == bars[-2]["timestamp"], key
@@ -616,7 +611,7 @@ class TestHistoricalAnomalyEndpoint:
             "volume_spike",
             "volatility_anomaly",
             "lof_anomaly",
-            "autoencoder_anomaly",
+            "bollinger_bands",
             "transformer_anomaly",
         }
 
@@ -627,14 +622,13 @@ class TestHistoricalAnomalyEndpoint:
             "volatility_anomaly",
             "volume_price_divergence",
             "lof_anomaly",
-            "autoencoder_anomaly",
+            "bollinger_bands",
             "transformer_anomaly",
         }
         assert historical["detectors"]["volume_spike"]["scope"] == "historical"
-        assert historical["detectors"]["autoencoder_anomaly"]["scope"] == "latest_only"
+        assert historical["detectors"]["bollinger_bands"]["scope"] == "historical"
         assert historical["detectors"]["transformer_anomaly"]["scope"] == "latest_only"
         assert historical["latest_only_detectors"] == [
-            "autoencoder_anomaly",
             "transformer_anomaly",
         ]
 
@@ -673,3 +667,46 @@ class TestStaticFileServing:
         data = response.json()
         assert data["status"] == "success"
 
+
+    @patch("main.fetch_history")
+    def test_two_phase_loading_include_transformer_flag(self, mock_fetch):
+        """Phase 1 skips Transformer with status=pending; Phase 2 computes it."""
+        bars = []
+        for index in range(40):
+            close = 100.0 + index * 0.5
+            bars.append({
+                "timestamp": f"2026-01-01T00:00:{index:02d}Z",
+                "open": close,
+                "high": close + 1.0,
+                "low": close - 1.0,
+                "close": close,
+                "volume": 1000,
+            })
+        mock_fetch.return_value = {
+            "symbol": "TCS",
+            "providerSymbol": "TCS.NS",
+            "exchange": "NSE",
+            "source": "Yahoo Finance via yfinance",
+            "interval": "1d",
+            "fetchedAt": "2026-02-01T00:00:00Z",
+            "lastDataTimestamp": bars[-1]["timestamp"],
+            "freshness": "test",
+            "bars": bars,
+        }
+
+        # Phase 1: include_transformer=false
+        res1 = client.get("/api/market/history?symbol=TCS&exchange=NSE&period=3mo&interval=1d&include_transformer=false")
+        assert res1.status_code == 200
+        data1 = res1.json()
+        assert data1["analysis"]["bollinger_bands"]["available"] is True
+        tr1 = data1["analysis"]["transformer_anomaly"]
+        assert tr1["available"] is False
+        assert tr1["status"] == "pending"
+
+        # Phase 2: include_transformer=true
+        res2 = client.get("/api/market/history?symbol=TCS&exchange=NSE&period=3mo&interval=1d&include_transformer=true")
+        assert res2.status_code == 200
+        data2 = res2.json()
+        assert data2["analysis"]["bollinger_bands"]["available"] is True
+        tr2 = data2["analysis"]["transformer_anomaly"]
+        assert tr2.get("status") != "pending"

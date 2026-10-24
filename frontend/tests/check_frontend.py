@@ -150,12 +150,12 @@ def main() -> int:
         "volume_price_divergence",
         "volume_spike",
         "volatility_anomaly",
+        "bollinger_bands",
     ):
         assert key in analysis, f"indicator key not referenced: {key}"
 
     for key in (
         "lof_anomaly",
-        "autoencoder_anomaly",
         "transformer_anomaly",
     ):
         assert key in analysis, f"detector key not referenced: {key}"

@@ -11,8 +11,8 @@ from collections import OrderedDict, deque
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from sklearn.neighbors import LocalOutlierFactor
-from sklearn.neural_network import MLPRegressor
 from sklearn.preprocessing import StandardScaler
 
 
@@ -908,258 +908,254 @@ def calculate_lof_anomaly(
     }
 
 
-# ---------------------------------------------------------------------------
-# Autoencoder-based anomaly detection (Phase 3A)
+# # ---------------------------------------------------------------------------
+# Bollinger Bands anomaly detection & indicator
 # ---------------------------------------------------------------------------
 
-AE_DEFAULT_HIDDEN_LAYERS = (8, 4, 8)
-AE_MAX_ITER = 3000
-AE_RANDOM_STATE = 42
-AE_ALPHA = 1e-4
-AE_MIN_HISTORY = 15          # historical observations required before scoring latest
-AE_ANOMALY_K = 2.0           # threshold = mean + k * std of historical errors
+BOLLINGER_PERIOD = 20
+BOLLINGER_STD_DEV_MULTIPLIER = 2.0
+BOLLINGER_SQUEEZE_PERCENTILE = 20.0
+BOLLINGER_SQUEEZE_LOOKBACK = 120
 
-AE_METHOD = (
-    "sklearn.neural_network.MLPRegressor used as a small deterministic "
-    "autoencoder (input 3 -> hidden 8-4-8 -> output 3) trained to reconstruct "
-    "its own input. StandardScaler is fitted on historical observations only. "
-    "The latest bar is scored separately as reconstruction error "
-    "(mean squared error between input and reconstruction); higher error means "
-    "the pattern is less like the training data. Threshold = mean(historical "
-    "reconstruction errors) + 2 * std(historical reconstruction errors), "
-    "computed only on training data. No future data or the latest bar influences "
-    "training, scaling, or the threshold."
+BOLLINGER_METHOD = (
+    "20-period Simple Moving Average (SMA) with upper and lower bands set at "
+    "2.0 standard deviations (ddof=0). Bandwidth is computed as (upper - lower) / middle * 100. "
+    "%B indicates the relative position of the close within the bands: (close - lower) / (upper - lower). "
+    "A breakout is flagged when the close is above the upper band or below the lower band. "
+    "A squeeze is flagged when bandwidth is in the lowest 20th percentile over recent history."
 )
 
 
-def _ae_unavailable(
-    explanation: str,
-    hidden_layers: tuple[int, ...] | None = None,
-    history_observations: int = 0,
-    evaluated_timestamp: str | None = None,
-) -> dict[str, Any]:
-    """Build a complete, stable autoencoder result shape for unavailable cases."""
+def _bollinger_unavailable(reason: str, bars_count: int = 0, excluded_trailing_bars: int = 0) -> dict[str, Any]:
     return {
         "available": False,
         "is_anomaly": None,
-        "reconstruction_error": None,
-        "threshold": None,
-        "hidden_layers": None if hidden_layers is None else list(hidden_layers),
-        "features_used": list(LOF_FEATURES),
-        "latest_features": None,
-        "evaluated_timestamp": evaluated_timestamp,
-        "history_observations": history_observations,
-        "method": AE_METHOD,
-        "explanation": explanation,
+        "period": BOLLINGER_PERIOD,
+        "multiplier": BOLLINGER_STD_DEV_MULTIPLIER,
+        "upper": None,
+        "middle": None,
+        "lower": None,
+        "percent_b": None,
+        "bandwidth": None,
+        "above_upper": False,
+        "below_lower": False,
+        "squeeze": False,
+        "squeeze_lookback": 0,
+        "signal": "unavailable",
+        "evaluated_timestamp": None,
+        "history_observations": bars_count,
+        "excluded_trailing_bars": excluded_trailing_bars,
+        "method": BOLLINGER_METHOD,
+        "explanation": f"Bollinger Bands unavailable: {reason}",
     }
 
 
-def calculate_autoencoder_anomaly(
+def calculate_bollinger_bands(
     bars: list[dict[str, Any]],
-    hidden_layers: tuple[int, ...] = AE_DEFAULT_HIDDEN_LAYERS,
+    period: int = BOLLINGER_PERIOD,
+    multiplier: float = BOLLINGER_STD_DEV_MULTIPLIER,
+    squeeze_lookback: int = BOLLINGER_SQUEEZE_LOOKBACK,
+    squeeze_percentile: float = BOLLINGER_SQUEEZE_PERCENTILE,
 ) -> dict[str, Any]:
-    """Score the latest bar with a small deterministic neural-network autoencoder.
+    """Compute Bollinger Bands, %B, Bandwidth, and breakout/squeeze flags.
 
-    Method
-    ------
-    1. Build causal features from consecutive real OHLCV bars: price return
-       %, volume change % and True Range as a percentage of the previous
-       close. A feature row for bar *i* never reads bar *i + 1*.
-    2. Fit ``StandardScaler`` on the historical feature rows only, then train
-       an ``MLPRegressor`` autoencoder to reconstruct its own scaled input
-       (input 3 -> hidden 8-4-8 -> output 3). Training uses only historical
-       observations; the latest bar is excluded.
-    3. Compute the reconstruction error (mean squared error between input and
-       reconstruction) for each historical observation, then derive the
-       anomaly threshold as ``mean(errors) + 2 * std(errors)`` from those
-       historical errors only.
-    4. Score only the *latest* bar as a new observation: reconstruction error
-       of the latest bar vs the historical threshold.
-
-    The returned ``reconstruction_error`` is the latest bar's mean squared
-    reconstruction error (higher = less like the training data).
-    ``is_anomaly`` is true when ``reconstruction_error > threshold``.
-
-    Missing values, insufficient history, constant features, invalid
-    parameters and training failures return ``available: False`` with an
-    explanation rather than a fabricated flag. An anomaly is a statistical
-    reconstruction outlier only: it is not proof of market manipulation and
-    not a trading signal.
+    Uses vectorised pandas operations on returned closes. Never fabricates values.
     """
-    # ---------- parameter validation ----------
-    valid_layers = None
-    if (
-        isinstance(hidden_layers, (tuple, list))
-        and len(hidden_layers) >= 1
-        and all(
-            isinstance(size, int) and not isinstance(size, bool) and size > 0
-            for size in hidden_layers
-        )
-    ):
-        valid_layers = tuple(int(size) for size in hidden_layers)
+    if not isinstance(bars, list) or not bars:
+        return _bollinger_unavailable("No price bars were provided.")
 
-    if valid_layers is None:
-        return _ae_unavailable(
-            "hidden_layers must be a non-empty sequence of positive integers.",
-        )
+    valid_bars = list(bars)
+    excluded_trailing_bars = 0
+    while valid_bars:
+        last = valid_bars[-1]
+        if not isinstance(last, dict) or last.get("close") is None or not np.isfinite(last["close"]):
+            valid_bars.pop()
+            excluded_trailing_bars += 1
+        else:
+            break
 
-    # ---------- feature extraction ----------
-    rows = _lof_feature_rows(bars)
-
-    if not rows:
-        return _ae_unavailable(
-            "No usable consecutive OHLCV observations: each autoencoder row "
-            "needs a bar plus the previous bar with close, high, low and "
-            "positive volume.",
-            hidden_layers=valid_layers,
+    if len(valid_bars) < period:
+        return _bollinger_unavailable(
+            f"At least {period} bars with finite closes are required ({len(valid_bars)} provided).",
+            bars_count=len(valid_bars),
+            excluded_trailing_bars=excluded_trailing_bars,
         )
 
-    if rows[-1]["bar_index"] != len(bars) - 1:
-        trailing_bars = _trailing_incomplete_bars(bars, rows[-1])
-        if trailing_bars is None:
-            return _ae_unavailable(
-                "A returned bar after the latest scorable observation has complete "
-                "OHLCV data but cannot form a feature row because an earlier bar is "
-                "invalid, so the latest observation cannot be scored honestly.",
-                hidden_layers=valid_layers,
-                history_observations=max(len(rows) - 1, 0),
-                evaluated_timestamp=rows[-1]["timestamp"],
-            )
-        excluded_trailing_bars = len(trailing_bars)
+    closes = pd.Series([float(b["close"]) for b in valid_bars], dtype=float)
+    timestamps = [str(b.get("timestamp", "")) for b in valid_bars]
+
+    sma = closes.rolling(window=period).mean()
+    # ddof=0 gives population standard deviation matching standard TA libraries
+    std = closes.rolling(window=period).std(ddof=0)
+
+    upper = sma + (multiplier * std)
+    lower = sma - (multiplier * std)
+
+    denom_sma = sma.replace(0, np.nan)
+    bandwidth = (upper - lower) / denom_sma * 100.0
+
+    band_width_diff = upper - lower
+    band_width_diff = band_width_diff.replace(0, np.nan)
+    percent_b = (closes - lower) / band_width_diff
+
+    latest_close = float(closes.iloc[-1])
+    latest_upper = float(upper.iloc[-1])
+    latest_middle = float(sma.iloc[-1])
+    latest_lower = float(lower.iloc[-1])
+    latest_timestamp = timestamps[-1]
+
+    raw_pb = percent_b.iloc[-1]
+    latest_percent_b = float(raw_pb) if pd.notna(raw_pb) else 0.5
+
+    raw_bw = bandwidth.iloc[-1]
+    latest_bandwidth = float(raw_bw) if pd.notna(raw_bw) else 0.0
+
+    above_upper = bool(latest_close > latest_upper)
+    below_lower = bool(latest_close < latest_lower)
+
+    # Squeeze detection: bandwidth in lowest ~20% of recent history
+    valid_bw = bandwidth.dropna()
+    lookback_window = min(len(valid_bw), squeeze_lookback)
+    recent_bw = valid_bw.iloc[-lookback_window:]
+
+    if len(recent_bw) >= 5:
+        threshold_bw = float(np.percentile(recent_bw, squeeze_percentile))
+        squeeze = bool(latest_bandwidth <= threshold_bw)
     else:
-        excluded_trailing_bars = 0
+        threshold_bw = None
+        squeeze = False
 
-    history_rows = rows[:-1]
-    latest_row = rows[-1]
-    history_count = len(history_rows)
+    if above_upper:
+        signal = "breakout_upper"
+    elif below_lower:
+        signal = "breakout_lower"
+    elif squeeze:
+        signal = "squeeze"
+    else:
+        signal = "normal"
 
-    if history_count < AE_MIN_HISTORY:
-        return _ae_unavailable(
-            f"Insufficient history: {history_count} usable historical "
-            f"observations, but at least {AE_MIN_HISTORY} are required before "
-            f"the latest bar can be scored.",
-            hidden_layers=valid_layers,
-            history_observations=history_count,
-            evaluated_timestamp=latest_row["timestamp"],
+    if above_upper:
+        detail = (
+            f"Close ({latest_close:.2f}) broke above the upper band ({latest_upper:.2f}), "
+            f"indicating high relative price expansion (%B = {latest_percent_b:.2f})."
+        )
+    elif below_lower:
+        detail = (
+            f"Close ({latest_close:.2f}) broke below the lower band ({latest_lower:.2f}), "
+            f"indicating strong downward momentum (%B = {latest_percent_b:.2f})."
+        )
+    elif squeeze:
+        detail = (
+            f"Bollinger Band squeeze detected: bandwidth ({latest_bandwidth:.2f}%) is in the "
+            f"lowest {squeeze_percentile:.0f}% of the last {lookback_window} bars, indicating volatility contraction."
+        )
+    else:
+        detail = (
+            f"Price is trading within the bands (%B = {latest_percent_b:.2f}, "
+            f"bandwidth = {latest_bandwidth:.2f}%)."
         )
 
-    # ---------- scaling ----------
-    try:
-        history_matrix = np.asarray(
-            [row["features"] for row in history_rows], dtype=float
-        )
-        latest_vector = np.asarray(latest_row["features"], dtype=float).reshape(1, -1)
-
-        if not np.all(np.isfinite(history_matrix)) or not np.all(
-            np.isfinite(latest_vector)
-        ):
-            return _ae_unavailable(
-                "Feature matrix contains non-finite values; autoencoder cannot "
-                "be trained.",
-                hidden_layers=valid_layers,
-                history_observations=history_count,
-                evaluated_timestamp=latest_row["timestamp"],
-            )
-
-        if np.all(np.ptp(history_matrix, axis=0) == 0):
-            return _ae_unavailable(
-                "All historical LOF features are constant, so the autoencoder "
-                "has no variance to learn from and cannot distinguish normal "
-                "from anomalous behaviour.",
-                hidden_layers=valid_layers,
-                history_observations=history_count,
-                evaluated_timestamp=latest_row["timestamp"],
-            )
-
-        scaler = StandardScaler().fit(history_matrix)
-        scaled_history = scaler.transform(history_matrix)
-        scaled_latest = scaler.transform(latest_vector)
-
-        # ---------- train autoencoder on history only ----------
-        model = MLPRegressor(
-            hidden_layer_sizes=valid_layers,
-            activation="relu",
-            solver="adam",
-            alpha=AE_ALPHA,
-            max_iter=AE_MAX_ITER,
-            random_state=AE_RANDOM_STATE,
-            shuffle=False,
-            early_stopping=False,
-        )
-        model.fit(scaled_history, scaled_history)
-
-        # Historical reconstruction errors (training data only).
-        history_reconstruction = model.predict(scaled_history)
-        history_errors = np.mean((scaled_history - history_reconstruction) ** 2, axis=1)
-
-        mean_error = float(np.mean(history_errors))
-        std_error = float(np.std(history_errors))
-        threshold = mean_error + AE_ANOMALY_K * std_error
-        if not math.isfinite(threshold) or threshold <= 0:
-            max_error = float(np.max(history_errors))
-            threshold = max_error if max_error > 0 else 1.0
-
-        # ---------- score the latest bar separately ----------
-        latest_reconstruction = model.predict(scaled_latest)
-        reconstruction_error = float(
-            np.mean((scaled_latest - latest_reconstruction) ** 2)
-        )
-    except Exception as exc:  # keep analysis failures out of the API error path
-        return _ae_unavailable(
-            f"Autoencoder computation failed: {type(exc).__name__}: {exc}",
-            hidden_layers=valid_layers,
-            history_observations=history_count,
-            evaluated_timestamp=latest_row["timestamp"],
-        )
-
-    is_anomaly = bool(reconstruction_error > threshold)
-    timestamp = latest_row["timestamp"]
-    latest_features = {
-        name: round(float(value), 4)
-        for name, value in zip(LOF_FEATURES, latest_row["features"])
-    }
-
-    prefix = (
-        f"The autoencoder was trained only on the {history_count} observations "
-        f"before the latest bar; the latest bar is scored separately as a "
-        f"reconstruction error, so no future data was used."
+    explanation = (
+        f"Bollinger Bands ({period}, {multiplier}): Middle SMA {latest_middle:.2f}, "
+        f"Upper {latest_upper:.2f}, Lower {latest_lower:.2f}. {detail}"
     )
-    if excluded_trailing_bars:
-        prefix += (
-            f" {excluded_trailing_bars} trailing returned bar(s) with missing or "
-            f"invalid OHLCV were excluded, so the latest complete bar was scored."
-        )
 
-    if is_anomaly:
-        explanation = (
-            f"Autoencoder flagged the latest bar ({timestamp}): reconstruction "
-            f"error {reconstruction_error:.4f} is above the anomaly threshold "
-            f"{threshold:.4f} (mean + {AE_ANOMALY_K} * std of historical "
-            f"reconstruction errors). {prefix} This is a statistical outlier, "
-            f"not proof of market manipulation or a guaranteed trading signal."
-        )
-    else:
-        explanation = (
-            f"The latest bar ({timestamp}) is not flagged: reconstruction "
-            f"error {reconstruction_error:.4f} is at or below the anomaly "
-            f"threshold {threshold:.4f} (mean + {AE_ANOMALY_K} * std of "
-            f"historical reconstruction errors). {prefix}"
-        )
+    is_anomaly = bool(above_upper or below_lower)
 
     return {
         "available": True,
         "is_anomaly": is_anomaly,
-        "reconstruction_error": round(reconstruction_error, 4),
-        "threshold": round(threshold, 4),
-        "hidden_layers": list(valid_layers),
-        "features_used": list(LOF_FEATURES),
-        "latest_features": latest_features,
-        "evaluated_timestamp": timestamp,
-        "history_observations": history_count,
+        "period": period,
+        "multiplier": multiplier,
+        "upper": round(latest_upper, 2),
+        "middle": round(latest_middle, 2),
+        "lower": round(latest_lower, 2),
+        "percent_b": round(latest_percent_b, 4),
+        "bandwidth": round(latest_bandwidth, 4),
+        "above_upper": above_upper,
+        "below_lower": below_lower,
+        "squeeze": squeeze,
+        "squeeze_lookback": lookback_window,
+        "signal": signal,
+        "evaluated_timestamp": latest_timestamp,
+        "history_observations": len(valid_bars),
         "excluded_trailing_bars": excluded_trailing_bars,
-        "method": AE_METHOD,
+        "method": BOLLINGER_METHOD,
         "explanation": explanation,
     }
+
+
+def _historical_bollinger_bands(
+    bars: list[dict[str, Any]],
+    period: int = BOLLINGER_PERIOD,
+    multiplier: float = BOLLINGER_STD_DEV_MULTIPLIER,
+) -> dict[str, Any]:
+    """Causal, walk-forward Bollinger Band breakout points across history."""
+    valid_bars = [
+        b
+        for b in bars
+        if isinstance(b, dict)
+        and b.get("close") is not None
+        and np.isfinite(b["close"])
+    ]
+    if len(valid_bars) < period:
+        return {
+            "available": False,
+            "scope": "historical",
+            "points": [],
+            "count": 0,
+            "reason": f"At least {period} bars required ({len(valid_bars)} provided).",
+        }
+
+    closes = pd.Series([float(b["close"]) for b in valid_bars], dtype=float)
+    sma = closes.rolling(window=period).mean()
+    std = closes.rolling(window=period).std(ddof=0)
+    upper = sma + (multiplier * std)
+    lower = sma - (multiplier * std)
+
+    points = []
+    for i in range(period - 1, len(valid_bars)):
+        c = float(closes.iloc[i])
+        u = float(upper.iloc[i])
+        l = float(lower.iloc[i])
+        m = float(sma.iloc[i])
+        b = valid_bars[i]
+
+        if c > u:
+            points.append({
+                "timestamp": b.get("timestamp"),
+                "close": round(c, 2),
+                "upper": round(u, 2),
+                "middle": round(m, 2),
+                "lower": round(l, 2),
+                "signal": "above_upper",
+                "is_anomaly": True,
+            })
+        elif c < l:
+            points.append({
+                "timestamp": b.get("timestamp"),
+                "close": round(c, 2),
+                "upper": round(u, 2),
+                "middle": round(m, 2),
+                "lower": round(l, 2),
+                "signal": "below_lower",
+                "is_anomaly": True,
+            })
+
+    return {
+        "available": True,
+        "scope": "historical",
+        "points": points,
+        "count": len(points),
+        "method": BOLLINGER_METHOD,
+        "explanation": (
+            f"Walk-forward historical breakout points where the close moved above the "
+            f"upper band or below the lower band ({period}-period, {multiplier} std dev)."
+        ),
+    }
+
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -1854,10 +1850,10 @@ HISTORICAL_LIMITATIONS = [
     HISTORICAL_SCOPE_NOTE,
     "Historical markers are limited to the bars returned for the selected "
     "timeframe and interval; nothing outside that response is inferred.",
-    "Autoencoder and Transformer historical scores are not produced because "
-    "their existing training routines would need to be repeated for every "
-    "candle. They remain latest-complete-bar checks and never contribute "
-    "historical markers.",
+    "Transformer historical scores are not produced because its sequence "
+    "model training routine would need to be repeated for every candle. It "
+    "remains a latest-complete-bar check and never contributes historical "
+    "markers.",
     "A statistical anomaly or divergence is an unusual observation, not proof "
     "of market manipulation, a prediction, or investment advice.",
 ]
@@ -2467,8 +2463,7 @@ def calculate_historical_anomalies(
     """Return timestamped anomaly points that can be computed causally.
 
     Supported historical sources are volume spike, volatility anomaly,
-    volume-price divergence and a bounded walk-forward LOF. Autoencoder and
-    Transformer remain latest-only because their existing training loops would
+    volume-price divergence and a bounded walk-forward LOF. Transformer remains latest-only because their existing training loops would
     be prohibitively expensive to repeat for every historical candle. Every
     returned point is tied to a real bar timestamp and every score/threshold is
     taken from the corresponding existing detector.
@@ -2479,15 +2474,7 @@ def calculate_historical_anomalies(
         "volatility_anomaly": _historical_volatility_anomalies(source),
         "volume_price_divergence": _historical_divergences(source),
         "lof_anomaly": _historical_lof(source),
-        "autoencoder_anomaly": _latest_only_detector(
-            name="Autoencoder",
-            method=AE_METHOD,
-            limitation=(
-                "Autoencoder historical markers are omitted rather than "
-                "retraining the neural network for every candle. Its latest "
-                "card is still computed by the existing endpoint."
-            ),
-        ),
+        "bollinger_bands": _historical_bollinger_bands(source),
         "transformer_anomaly": _latest_only_detector(
             name="Transformer",
             method=TR_METHOD,
@@ -2509,7 +2496,6 @@ def calculate_historical_anomalies(
         "bar_count": len(source),
         "detectors": detectors,
         "latest_only_detectors": [
-            "autoencoder_anomaly",
             "transformer_anomaly",
         ],
         "limitations": list(HISTORICAL_LIMITATIONS),
