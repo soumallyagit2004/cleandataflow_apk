@@ -554,14 +554,13 @@ test("buildAnomalyMarkers places legacy latest flags as red circles", () => {
       threshold: 1.5,
       explanation: "LOF explanation",
     },
-    bollinger_bands: {
+    autoencoder_anomaly: {
       available: true,
       is_anomaly: false,
       evaluated_timestamp: latest.timestamp,
-      percent_b: 0.5,
-      bandwidth: 0.1,
-      signal: "within_bands",
-      explanation: "BB explanation",
+      reconstruction_error: 0.2,
+      threshold: 1.0,
+      explanation: "AE explanation",
     },
     transformer_anomaly: {
       available: false,
@@ -586,7 +585,7 @@ test("buildAnomalyMarkers places legacy latest flags as red circles", () => {
   });
 
   const lof = result.entries.find((entry) => entry.key === "lof_anomaly");
-  const bb = result.entries.find((entry) => entry.key === "bollinger_bands");
+  const ae = result.entries.find((entry) => entry.key === "autoencoder_anomaly");
   const transformer = result.entries.find(
     (entry) => entry.key === "transformer_anomaly"
   );
@@ -594,7 +593,7 @@ test("buildAnomalyMarkers places legacy latest flags as red circles", () => {
   assert.equal(lof.status, "flagged");
   assert.equal(lof.price, 12.5);
   assert.equal(lof.evaluatedTimestamp, latest.timestamp);
-  assert.equal(bb.status, "clear");
+  assert.equal(ae.status, "clear");
   assert.equal(transformer.status, "unavailable");
   assert.deepEqual(result.issues, []);
 });
@@ -613,7 +612,7 @@ test("simultaneous latest flags cluster into one marker per candle", () => {
 
   const analysis = {
     lof_anomaly: block({ lof_score: 2 }),
-    bollinger_bands: block({ percent_b: 1.2, signal: "above_upper" }),
+    autoencoder_anomaly: block({ reconstruction_error: 3 }),
     transformer_anomaly: block({ anomaly_score: 4 }),
   };
 
@@ -628,7 +627,7 @@ test("simultaneous latest flags cluster into one marker per candle", () => {
   const flagged = result.entries.filter((entry) => entry.status === "flagged");
   assert.deepEqual(
     flagged.map((entry) => entry.key).sort(),
-    ["bollinger_bands", "lof_anomaly", "transformer_anomaly"]
+    ["autoencoder_anomaly", "lof_anomaly", "transformer_anomaly"]
   );
   assert.ok(flagged.every((entry) => entry.price === 12.5));
 });
@@ -685,7 +684,7 @@ test("historical points use returned timestamps and one cluster per candle", () 
           },
         ],
       },
-      transformer_anomaly: {
+      autoencoder_anomaly: {
         available: false,
         historical_available: false,
         scope: "latest_only",
@@ -696,7 +695,7 @@ test("historical points use returned timestamps and one cluster per candle", () 
             score: 99,
           },
         ],
-        reason: "Transformer remains latest-only.",
+        reason: "Autoencoder remains latest-only.",
       },
     },
   };
@@ -706,11 +705,11 @@ test("historical points use returned timestamps and one cluster per candle", () 
       is_anomaly: false,
       evaluated_timestamp: "2026-01-03T00:00:00Z",
     },
-    transformer_anomaly: {
+    autoencoder_anomaly: {
       available: true,
       is_anomaly: false,
       evaluated_timestamp: "2026-01-03T00:00:00Z",
-      anomaly_score: 0.1,
+      reconstruction_error: 0.1,
       threshold: 1,
     },
   };
@@ -724,11 +723,11 @@ test("historical points use returned timestamps and one cluster per candle", () 
   assert.ok(result.markers.every((marker) => marker.shape === "circle"));
   assert.ok(result.markers.every((marker) => marker.color === "#ef4444"));
 
-  const tr = result.entries.find((entry) => entry.key === "transformer_anomaly");
-  assert.equal(tr.historicalPoints, 0);
-  assert.equal(tr.latestOnly, true);
-  assert.equal(tr.scope, "latest_only");
-  assert.ok(result.latestOnlyKeys.includes("transformer_anomaly"));
+  const ae = result.entries.find((entry) => entry.key === "autoencoder_anomaly");
+  assert.equal(ae.historicalPoints, 0);
+  assert.equal(ae.latestOnly, true);
+  assert.equal(ae.scope, "latest_only");
+  assert.ok(result.latestOnlyKeys.includes("autoencoder_anomaly"));
   assert.ok(
     result.limitations.includes("Historical points use only earlier bars.")
   );
@@ -972,48 +971,4 @@ test("formatters use real values and IST exchange time", () => {
   assert.match(timeTick, /^\d{2}:\d{2}$/);
 
   assert.notEqual(CU.formatDateTime("2026-10-19T04:15:00Z"), "—");
-});
-
-test("buildHistoryUrl supports include_transformer flag for two-phase loading", () => {
-  const urlPhase1 = CU.buildHistoryUrl("http://localhost:8000/", {
-    symbol: "INFY",
-    exchange: "NSE",
-    period: "3mo",
-    interval: "1d",
-    include_transformer: false,
-  });
-  const parsed1 = new URL(urlPhase1);
-  assert.equal(parsed1.searchParams.get("include_transformer"), "false");
-
-  const urlPhase2 = CU.buildHistoryUrl("http://localhost:8000/", {
-    symbol: "INFY",
-    exchange: "NSE",
-    period: "3mo",
-    interval: "1d",
-    include_transformer: true,
-  });
-  const parsed2 = new URL(urlPhase2);
-  assert.equal(parsed2.searchParams.get("include_transformer"), "true");
-});
-
-test("buildIndicatorLevels includes Bollinger Bands lines when available", () => {
-  const analysis = {
-    bollinger_bands: {
-      available: true,
-      upper: 155.5,
-      middle: 150.0,
-      lower: 144.5,
-    },
-  };
-  const levels = CU.buildIndicatorLevels(analysis);
-  const bbUpper = levels.find((l) => l.title === "BB Upper (20, 2)");
-  const bbMiddle = levels.find((l) => l.title === "BB Middle (20)");
-  const bbLower = levels.find((l) => l.title === "BB Lower (20, 2)");
-
-  assert.ok(bbUpper, "BB Upper should be present");
-  assert.equal(bbUpper.price, 155.5);
-  assert.ok(bbMiddle, "BB Middle should be present");
-  assert.equal(bbMiddle.price, 150.0);
-  assert.ok(bbLower, "BB Lower should be present");
-  assert.equal(bbLower.price, 144.5);
 });

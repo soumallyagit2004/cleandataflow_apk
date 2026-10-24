@@ -170,6 +170,17 @@
       thresholdField: "threshold",
     },
     {
+      key: "autoencoder_anomaly",
+      name: "Autoencoder",
+      short: "AE",
+      position: "belowBar",
+      shape: "circle",
+      color: "#e65100",
+      scoreField: "reconstruction_error",
+      scoreLabel: "Reconstruction error",
+      thresholdField: "threshold",
+    },
+    {
       key: "transformer_anomaly",
       name: "Transformer",
       short: "TR",
@@ -240,18 +251,17 @@
       latestOnly: false,
     },
     {
-      key: "bollinger_bands",
-      name: "Bollinger Bands breakout",
-      short: "BB",
-      latestScoreField: "percent_b",
-      latestScoreLabel: "%B",
-      latestThresholdField: null,
-      latestThresholdValue: 1.0,
-      latestSignalField: "signal",
-      latestSignalValues: ["above_upper", "below_lower", "breakout_upper", "breakout_lower", "squeeze"],
-      latestAnomalyField: null,
+      key: "autoencoder_anomaly",
+      name: "Autoencoder",
+      short: "AE",
+      latestScoreField: "reconstruction_error",
+      latestScoreLabel: "Reconstruction error",
+      latestThresholdField: "threshold",
+      latestSignalField: null,
+      latestSignalValues: [],
+      latestAnomalyField: "is_anomaly",
       hasScore: true,
-      latestOnly: false,
+      latestOnly: true,
     },
     {
       key: "transformer_anomaly",
@@ -1045,46 +1055,6 @@
       });
     }
 
-    const bb = analysis.bollinger_bands;
-    if (bb && bb.available === true) {
-      const upper = finiteNumber(bb.upper);
-      if (upper !== null) {
-        levels.push({
-          id: "bb_upper",
-          title: `BB Upper (${bb.period || 20}, ${bb.multiplier || 2})`,
-          price: upper,
-          color: "#ab47bc",
-          lineStyle: 2,
-          axisLabelVisible: true,
-          source: "bollinger_bands",
-        });
-      }
-      const middle = finiteNumber(bb.middle);
-      if (middle !== null) {
-        levels.push({
-          id: "bb_middle",
-          title: `BB Middle (${bb.period || 20})`,
-          price: middle,
-          color: "#8e24aa",
-          lineStyle: 1,
-          axisLabelVisible: true,
-          source: "bollinger_bands",
-        });
-      }
-      const lower = finiteNumber(bb.lower);
-      if (lower !== null) {
-        levels.push({
-          id: "bb_lower",
-          title: `BB Lower (${bb.period || 20}, ${bb.multiplier || 2})`,
-          price: lower,
-          color: "#ab47bc",
-          lineStyle: 2,
-          axisLabelVisible: true,
-          source: "bollinger_bands",
-        });
-      }
-    }
-
     return levels;
   }
 
@@ -1133,12 +1103,6 @@
       interval: selection.interval,
       analyze: selection.analyze === false ? "false" : "true",
     });
-    if (selection.include_transformer !== undefined) {
-      params.set(
-        "include_transformer",
-        selection.include_transformer ? "true" : "false"
-      );
-    }
     return `${String(base).replace(/\/+$/, "")}/api/market/history?${params.toString()}`;
   }
 

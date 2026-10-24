@@ -1166,7 +1166,7 @@ function renderChartNote(mapped, data, hasVolume) {
   }
 
   const analysis = data.analysis || {};
-  const excluded = ["lof_anomaly", "transformer_anomaly"]
+  const excluded = ["lof_anomaly", "autoencoder_anomaly", "transformer_anomaly"]
     .map((key) => {
       const block = analysis[key];
       const value = block ? CU.finiteNumber(block.excluded_trailing_bars) : null;
@@ -1472,7 +1472,7 @@ function renderMeta(data, mapped, selection) {
     : null;
   const omitted = mapped.total - mapped.bars.length;
   const analysis = data.analysis || {};
-  const excluded = ["lof_anomaly", "transformer_anomaly"]
+  const excluded = ["lof_anomaly", "autoencoder_anomaly", "transformer_anomaly"]
     .map((key) => {
       const block = analysis[key];
       const value = block ? CU.finiteNumber(block.excluded_trailing_bars) : null;
@@ -1542,29 +1542,20 @@ function badge(textValue, className) {
   )}</span>`;
 }
 
-function card(title, status, bodyHtml, badgeText, badgeClass, cardId) {
+function card(title, status, bodyHtml, badgeText, badgeClass) {
   const classes = ["analysis-card"];
   if (status === "unavailable") classes.push("is-unavailable");
   if (status === "flagged") classes.push("is-flagged");
-  if (status === "pending") classes.push("is-pending");
 
-  const fallbackBadge =
-    status === "unavailable"
-      ? "Unavailable"
-      : status === "pending"
-        ? "Computing…"
-        : "Available";
+  const fallbackBadge = status === "unavailable" ? "Unavailable" : "Available";
   const fallbackClass =
     status === "unavailable"
       ? "unavailable"
       : status === "flagged"
         ? "flagged"
-        : status === "pending"
-          ? "info"
-          : "ok";
+        : "ok";
 
-  const idAttr = cardId ? ` id="${escapeHtml(cardId)}"` : "";
-  return `<article class="${classes.join(" ")}"${idAttr}>
+  return `<article class="${classes.join(" ")}">
     <h3><span>${escapeHtml(title)}</span>${badge(
       badgeText || fallbackBadge,
       badgeClass || fallbackClass
@@ -1848,20 +1839,7 @@ function anomalyCard(config, block) {
         config.name
       )} block was returned by the backend.</p>`,
       "Unavailable",
-      "unavailable",
-      config.key
-    );
-  }
-
-  if (block.status === "pending") {
-    return card(
-      config.name,
-      "pending",
-      `<p class="explain">Evaluating neural sequence model in background…</p>
-       <p class="method">Deep sequence learning evaluates contextual anomaly score without blocking other indicators.</p>`,
-      "Computing…",
-      "pending",
-      config.key
+      "unavailable"
     );
   }
 
@@ -1875,8 +1853,7 @@ function anomalyCard(config, block) {
       `<p class="explain">The backend marked this detector available but did not return a boolean is_anomaly value, so no signal was inferred.</p>
        ${methodText(block.method)}`,
       "Unavailable",
-      "unavailable",
-      config.key
+      "unavailable"
     );
   }
 
@@ -1912,8 +1889,7 @@ function anomalyCard(config, block) {
        ${details}
        ${methodText(block.method)}`,
       "Unavailable",
-      "unavailable",
-      config.key
+      "unavailable"
     );
   }
 
@@ -1929,6 +1905,16 @@ function anomalyCard(config, block) {
   }
   if (block.contamination !== null && block.contamination !== undefined) {
     details.push(row("Contamination", fmtValue(block.contamination, 4)));
+  }
+  if (block.hidden_layers) {
+    details.push(
+      row(
+        "Hidden layers",
+        Array.isArray(block.hidden_layers)
+          ? escapeHtml(block.hidden_layers.join(" → "))
+          : escapeHtml(block.hidden_layers)
+      )
+    );
   }
 
   details.push(
@@ -1983,8 +1969,7 @@ function anomalyCard(config, block) {
     flagged ? "flagged" : "ok",
     body,
     flagged ? "Anomaly flagged" : "No anomaly",
-    flagged ? "flagged" : "clear",
-    config.key
+    flagged ? "flagged" : "clear"
   );
 }
 
@@ -2030,100 +2015,8 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
     );
   }
 
-function bollingerBandsCard(bollinger) {
-  if (!bollinger || bollinger.available !== true) {
-    const reason =
-      bollinger && bollinger.explanation
-        ? bollinger.explanation
-        : "Bollinger Bands require at least 20 bars with valid close prices.";
-    return card(
-      "Bollinger Bands (20, 2σ)",
-      "unavailable",
-      `<p class="explain">${escapeHtml(reason)}</p>${methodText(
-        bollinger ? bollinger.method : ""
-      )}`,
-      "Unavailable",
-      "unavailable"
-    );
-  }
-
-  const upper = fmtValue(bollinger.upper, 2);
-  const middle = fmtValue(bollinger.middle, 2);
-  const lower = fmtValue(bollinger.lower, 2);
-  const pb =
-    bollinger.percent_b != null ? Number(bollinger.percent_b).toFixed(2) : "—";
-  const bw =
-    bollinger.bandwidth != null
-      ? `${Number(bollinger.bandwidth).toFixed(2)}%`
-      : "—";
-
-  let badgeText = "Within bands";
-  let badgeClass = "ok";
-  if (bollinger.above_upper) {
-    badgeText = "Above upper band";
-    badgeClass = "flagged";
-  } else if (bollinger.below_lower) {
-    badgeText = "Below lower band";
-    badgeClass = "flagged";
-  } else if (bollinger.squeeze) {
-    badgeText = "Squeeze";
-    badgeClass = "info";
-  }
-
-  const rows = [
-    row("Upper band (+2σ)", upper),
-    row("Middle (SMA 20)", middle),
-    row("Lower band (-2σ)", lower),
-    row("%B (Position)", pb),
-    row("Bandwidth", bw),
-    row(
-      "Squeeze state",
-      bollinger.squeeze
-        ? `Yes (lowest 20% of last ${bollinger.squeeze_lookback || 120} bars)`
-        : "No"
-    ),
-    row(
-      "Evaluated bar",
-      bollinger.evaluated_timestamp ? fmtTime(bollinger.evaluated_timestamp) : "—"
-    ),
-  ];
-
-  return card(
-    "Bollinger Bands (20, 2σ)",
-    bollinger.above_upper || bollinger.below_lower ? "flagged" : "ok",
-    `<p class="metric signal">${escapeHtml(bollinger.signal || "normal")}</p>
-     ${rows.join("")}
-     ${explainText(bollinger.explanation)}
-     ${methodText(bollinger.method)}`,
-    badgeText,
-    badgeClass
-  );
-}
-
-function renderAnalysis(analysis, rawBarCount, completeBarCount) {
-  const blocks = analysis && typeof analysis === "object" ? analysis : null;
-  const notices = [];
-
-  if (!blocks) {
-    notices.push(
-      noticeCard(
-        "No analysis object",
-        "The backend response did not include analysis results. No indicator values were invented."
-      )
-    );
-  }
-  if (completeBarCount === 0) {
-    notices.push(
-      noticeCard(
-        "No usable OHLCV bars",
-        `${rawBarCount} bar(s) were returned, but none had usable OHLCV values. Indicators and anomaly detectors cannot be computed honestly.`
-      )
-    );
-  }
-
   const trendCards = [
     smaCard(blocks && blocks.sma, rawBarCount, completeBarCount),
-    bollingerBandsCard(blocks && blocks.bollinger_bands),
     rsiCard(blocks && blocks.rsi, rawBarCount, completeBarCount),
     fibonacciCard(blocks && blocks.fibonacci),
     emaDeviationCard(blocks && blocks.ema_deviation),
@@ -2158,7 +2051,7 @@ function renderAnalysis(analysis, rawBarCount, completeBarCount) {
   if (els.anomalyGrid) {
     els.anomalyGrid.innerHTML = analysisGroup(
       "Model outputs",
-      "LOF and transformer outputs are reported as returned. Latest-only models are never drawn backwards through history.",
+      "LOF, autoencoder and transformer outputs are reported as returned. Latest-only models are never drawn backwards through history.",
       anomalyCards.join("")
     );
   }
@@ -2409,10 +2302,7 @@ async function runAnalysis(selection, options) {
       state.guard.cancel();
     }, REQUEST_TIMEOUT_MS);
 
-    const phase1Selection = Object.assign({}, selection, {
-      include_transformer: false,
-    });
-    const url = CU.buildHistoryUrl(API_ROOT, phase1Selection);
+    const url = CU.buildHistoryUrl(API_ROOT, selection);
     const response = await fetch(url, {
       signal: ticket.signal,
       headers: { Accept: "application/json" },
@@ -2457,8 +2347,6 @@ async function runAnalysis(selection, options) {
           selection.window
         )} window.`
       );
-      // Phase 2: fetch Transformer in background
-      loadTransformerPhase2(selection, ticket, payload, mapped);
     } else {
       setWindowStatus(
         "warning",
@@ -2523,72 +2411,6 @@ async function runAnalysis(selection, options) {
       state.activeRequestKey = null;
       setChartRefreshing(false);
       setBusy(false);
-    }
-  }
-}
-
-async function loadTransformerPhase2(selection, ticket, phase1Payload, mapped) {
-  const phase2Selection = Object.assign({}, selection, {
-    include_transformer: true,
-  });
-  const url = CU.buildHistoryUrl(API_ROOT, phase2Selection);
-  const controller = new AbortController();
-  const phase2Timer = window.setTimeout(() => controller.abort(), 60000);
-  if (ticket.signal) {
-    ticket.signal.addEventListener("abort", () => controller.abort(), {
-      once: true,
-    });
-  }
-
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
-    window.clearTimeout(phase2Timer);
-
-    if (!ticket.isCurrent()) return;
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const data = await res.json();
-    if (!ticket.isCurrent() || !data || !data.analysis) return;
-
-    const trBlock = data.analysis.transformer_anomaly;
-    if (trBlock) {
-      phase1Payload.analysis.transformer_anomaly = trBlock;
-      const el = document.getElementById("transformer_anomaly");
-      if (el && CU) {
-        const trConfig = CU.DETECTOR_CONFIG.find(
-          (c) => c.key === "transformer_anomaly"
-        );
-        if (trConfig) {
-          el.outerHTML = anomalyCard(trConfig, trBlock);
-        }
-      }
-      if (trBlock.is_anomaly && els.priceChart) {
-        renderMarkers(phase1Payload, mapped);
-      }
-    }
-  } catch (err) {
-    window.clearTimeout(phase2Timer);
-    if (!ticket.isCurrent()) return;
-    const failedBlock = {
-      available: false,
-      status: "unavailable",
-      explanation:
-        "Transformer evaluation timed out or was unavailable. Other indicators remain valid.",
-    };
-    if (phase1Payload.analysis) {
-      phase1Payload.analysis.transformer_anomaly = failedBlock;
-    }
-    const el = document.getElementById("transformer_anomaly");
-    if (el && CU) {
-      const trConfig = CU.DETECTOR_CONFIG.find(
-        (c) => c.key === "transformer_anomaly"
-      );
-      if (trConfig) {
-        el.outerHTML = anomalyCard(trConfig, failedBlock);
-      }
     }
   }
 }

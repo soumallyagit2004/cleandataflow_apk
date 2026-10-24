@@ -32,10 +32,9 @@ from analysis import (
     calculate_volume_spike,
     calculate_volatility_anomaly,
     calculate_lof_anomaly,
-    calculate_bollinger_bands,
+    calculate_autoencoder_anomaly,
     calculate_transformer_anomaly,
     calculate_historical_anomalies,
-    TR_METHOD,
 )
 
 # --------------------------------------------------------------------------
@@ -372,7 +371,6 @@ def get_market_history(
     period: str = "3mo",
     interval: str = "1d",
     analyze: bool = True,
-    include_transformer: bool = True,
 ):
     """Return provider-sourced historical OHLCV and optional explainable indicators."""
     try:
@@ -404,28 +402,11 @@ def get_market_history(
         # New: Local Outlier Factor anomaly (scored on the latest bar only)
         lof = calculate_lof_anomaly(bars)
 
-        # Bollinger Bands (20-period SMA +/- 2 std dev)
-        bollinger = calculate_bollinger_bands(bars)
+        # New: Autoencoder anomaly (scored on the latest bar only)
+        ae = calculate_autoencoder_anomaly(bars)
 
-        # Transformer anomaly (scored on the latest bar only)
-        if include_transformer:
-            tr = calculate_transformer_anomaly(bars)
-        else:
-            tr = {
-                "available": False,
-                "status": "pending",
-                "reason": "Transformer calculation deferred to Phase 2 background request.",
-                "is_anomaly": False,
-                "anomaly_score": None,
-                "threshold": None,
-                "features_used": None,
-                "latest_features": None,
-                "latest_prediction": None,
-                "evaluated_timestamp": None,
-                "history_observations": 0,
-                "method": TR_METHOD,
-                "explanation": "Transformer evaluation is computing in the background (Phase 2).",
-            }
+        # New: Transformer anomaly (scored on the latest bar only)
+        tr = calculate_transformer_anomaly(bars)
 
         # Combine into a single analysis dict
         result["analysis"] = {
@@ -484,11 +465,23 @@ def get_market_history(
                 "method": lof["method"],
                 "explanation": lof["explanation"],
             },
-            "bollinger_bands": bollinger,
+            "autoencoder_anomaly": {
+                "available": ae["available"],
+                "is_anomaly": ae["is_anomaly"],
+                "reconstruction_error": ae["reconstruction_error"],
+                "threshold": ae["threshold"],
+                "hidden_layers": ae["hidden_layers"],
+                "features_used": ae["features_used"],
+                "latest_features": ae["latest_features"],
+                "evaluated_timestamp": ae["evaluated_timestamp"],
+                "history_observations": ae["history_observations"],
+                "excluded_trailing_bars": ae.get("excluded_trailing_bars", 0),
+                "method": ae["method"],
+                "explanation": ae["explanation"],
+            },
             "transformer_anomaly": {
                 "available": tr["available"],
                 "is_anomaly": tr["is_anomaly"],
-                "status": tr.get("status"),
                 "anomaly_score": tr["anomaly_score"],
                 "threshold": tr["threshold"],
                 "features_used": tr["features_used"],
